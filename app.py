@@ -242,10 +242,10 @@ if st.session_state.page == "dashboard":
                         st.session_state.page = "detail"
                         st.rerun()
                 with c2:
-                    price_str = price_data.get("price_display", "—")
+                    price_str = price_data.get("price_display", "—").replace("$", "\\$")
                     avg_str = (f"{h['avg_price_krw']:,.0f}원"
                                if h["market"] == "KR"
-                               else f"${h['avg_price_usd']:,.2f}")
+                               else f"\\${h['avg_price_usd']:,.2f}")
                     st.markdown(f"{price_str}  \n<small style='color:#aaa'>{avg_str}</small>",
                                 unsafe_allow_html=True)
                 with c3:
