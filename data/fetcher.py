@@ -17,9 +17,11 @@ def _rss_parse(url: str) -> feedparser.FeedParserDict:
     except Exception:
         return feedparser.parse("")
 
-_TODAY = datetime.today()
-_T1 = (_TODAY - timedelta(days=1)).strftime("%Y%m%d")    # T-1 (pykrx 기준일)
-_D90 = (_TODAY - timedelta(days=130)).strftime("%Y%m%d")  # 60일 MA 확보용 여유
+def _t1() -> str:
+    return (datetime.today() - timedelta(days=1)).strftime("%Y%m%d")
+
+def _d130() -> str:
+    return (datetime.today() - timedelta(days=130)).strftime("%Y%m%d")
 
 
 # ── 시세 + 기술지표 ──────────────────────────────────────────
@@ -27,7 +29,7 @@ _D90 = (_TODAY - timedelta(days=130)).strftime("%Y%m%d")  # 60일 MA 확보용 �
 def fetch_price_kr(ticker: str) -> dict:
     """pykrx로 KR 종목 OHLCV + RSI/MA/52주 위치 수집."""
     try:
-        df = krx.get_market_ohlcv(_D90, _T1, ticker)
+        df = krx.get_market_ohlcv(_d130(), _t1(), ticker)
         if df.empty:
             return {"ticker": ticker, "market": "KR", "price": 0,
                     "price_display": "데이터 없음", "error": "T+1 대기 중 또는 휴장"}
@@ -65,7 +67,7 @@ def fetch_price_us(ticker: str) -> dict:
     """yfinance로 US 종목 OHLCV + RSI/MA/52주 위치 수집."""
     try:
         obj  = yf.Ticker(ticker)
-        hist = obj.history(period="6mo")
+        hist = obj.history(period="1y")
         if hist.empty:
             return {"ticker": ticker, "market": "US", "price": 0,
                     "price_display": "데이터 없음", "error": "yfinance 응답 없음"}
@@ -78,10 +80,8 @@ def fetch_price_us(ticker: str) -> dict:
         ma20 = round(float(close.rolling(20).mean().iloc[-1]), 2) if len(close) >= 20 else None
         ma60 = round(float(close.rolling(60).mean().iloc[-1]), 2) if len(close) >= 60 else None
 
-        hist1y = obj.history(period="1y")
-        close1y = hist1y["Close"].astype(float)
-        high52 = float(close1y.max())
-        low52  = float(close1y.min())
+        high52 = float(close.max())
+        low52  = float(close.min())
         week52_pos = round((current - low52) / (high52 - low52) * 100, 1) if high52 != low52 else 50.0
 
         return {

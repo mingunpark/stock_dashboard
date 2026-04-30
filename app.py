@@ -1,6 +1,5 @@
 import json
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 import streamlit as st
@@ -135,7 +134,8 @@ def calc_pnl(holding: dict, price_data: dict, fx: float) -> dict:
         pnl_krw  = (current_price - avg_usd) * fx * qty
         avg = avg_usd
 
-    pnl_pct = (pnl_krw / (avg * qty * (1 if market == "KR" else fx))) * 100 if avg else 0
+    cost_base = avg * qty * (1 if market == "KR" else fx)
+    pnl_pct = (pnl_krw / cost_base * 100) if cost_base else 0
     return {"eval_krw": eval_krw, "pnl_krw": pnl_krw, "pnl_pct": pnl_pct}
 
 
