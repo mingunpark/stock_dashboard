@@ -1,0 +1,39 @@
+{
+  "capital_krw": 10000000,
+  "target_return_pct": 15.0,
+  "holdings": [
+    {
+      "ticker": "005930",
+      "market": "KR",
+      "name": "삼성전자",
+      "sector": "반도체",
+      "quantity": 100,
+      "avg_price_krw": 72000
+    },
+    {
+      "ticker": "000660",
+      "market": "KR",
+      "name": "SK하이닉스",
+      "sector": "반도체",
+      "quantity": 50,
+      "avg_price_krw": 180000
+    },
+    {
+      "ticker": "NVDA",
+      "market": "US",
+      "name": "엔비디아",
+      "sector": "반도체",
+      "quantity": 10,
+      "avg_price_usd": 850.00
+    },
+    {
+      "ticker": "AAPL",
+      "market": "US",
+      "name": "애플",
+      "sector": "빅테크",
+      "quantity": 20,
+      "avg_price_usd": 175.00
+    }
+  ],
+  "cash_krw": 5000000
+}

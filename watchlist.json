@@ -1,0 +1,7 @@
+[
+  {"ticker": "035420", "market": "KR", "name": "NAVER",   "sector": "IT플랫폼"},
+  {"ticker": "051910", "market": "KR", "name": "LG화학",   "sector": "화학/배터리"},
+  {"ticker": "MSFT",   "market": "US", "name": "마이크로소프트", "sector": "빅테크"},
+  {"ticker": "META",   "market": "US", "name": "메타",     "sector": "소셜미디어"},
+  {"ticker": "TSM",    "market": "US", "name": "TSMC",    "sector": "반도체"}
+]
