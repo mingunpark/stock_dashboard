@@ -1,4 +1,6 @@
+import json
 import os
+import re
 
 from google import genai
 from tenacity import (
@@ -108,6 +110,67 @@ def _call_gemini(prompt: str) -> str:
     return response.text
 
 
+# ── 매크로 뉴스 큐레이션 ─────────────────────────────────────
+
+def _parse_curated_news(raw: str) -> list[dict]:
+    m = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', raw)
+    text = m.group(1) if m else raw.strip()
+    try:
+        items = json.loads(text)
+        if isinstance(items, list):
+            return [i for i in items if isinstance(i, dict)][:6]
+    except Exception:
+        pass
+    return []
+
+
+@retry(
+    stop=stop_after_attempt(2),
+    wait=wait_exponential(multiplier=1, min=5, max=15),
+    retry=retry_if_exception_type(Exception),
+    reraise=True,
+)
+def _call_gemini_curate(prompt: str) -> str:
+    client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+    response = client.models.generate_content(model=_MODEL, contents=prompt)
+    return response.text
+
+
+def curate_macro_news(raw_items: list[dict]) -> list[dict]:
+    """국내외 뉴스 원본을 Gemini로 큐레이션: 증시 중요 뉴스 6개 선별 + 요약."""
+    if not os.environ.get("GEMINI_API_KEY") or not raw_items:
+        return []
+
+    news_list = "\n".join(
+        f"[{i+1}] [{item.get('source','')}] {item['title']} | LINK:{item.get('link','')}"
+        for i, item in enumerate(raw_items)
+        if item.get("title")
+    )
+
+    prompt = f"""아래는 최근 수집된 국내외 경제·증시 뉴스 목록입니다.
+주식 투자자 관점에서 증시에 가장 중요한 뉴스 6개를 선별하고, JSON 배열 형식으로만 출력하세요.
+다른 텍스트나 설명은 절대 포함하지 마세요. LINK는 목록에서 그대로 복사하세요.
+
+뉴스 목록:
+{news_list}
+
+출력 형식 (JSON 배열만):
+[
+  {{
+    "title": "뉴스 제목 (한국어. 원문이 영어면 번역)",
+    "summary": "2-3문장 요약. 이 뉴스가 증시에 어떤 영향을 미치는지 포함.",
+    "source": "출처명",
+    "link": "원문 링크 (목록의 LINK: 이후 값 그대로)"
+  }}
+]"""
+
+    try:
+        raw = _call_gemini_curate(prompt)
+        return _parse_curated_news(raw)
+    except Exception:
+        return []
+
+
 def analyze_stock(holding: dict, price_data: dict, news: list[dict]) -> dict:
     if price_data.get("error"):
         return {
@@ -126,5 +189,18 @@ def analyze_stock(holding: dict, price_data: dict, news: list[dict]) -> dict:
     except Exception as e:
         return {
             "opinion": None, "reasons": [], "counterpoint": None,
-            "raw": None, "error": str(e),
+            "raw": None, "error": _friendly_error(e),
         }
+
+
+def _friendly_error(e: Exception) -> str:
+    s = str(e)
+    if "429" in s or "RESOURCE_EXHAUSTED" in s or "quota" in s.lower():
+        return "Gemini API 무료 할당량 초과 — 내일 재시도하거나 유료 플랜으로 업그레이드하세요 (일 20회 제한)"
+    if "503" in s or "UNAVAILABLE" in s:
+        return "Gemini API 일시 과부하 — 잠시 후 새로고침하세요 (503)"
+    if "500" in s or "INTERNAL" in s:
+        return "Gemini API 내부 오류 — 잠시 후 재시도하세요 (500)"
+    if "401" in s or "API_KEY" in s or "UNAUTHENTICATED" in s:
+        return "Gemini API 키 인증 실패 — .env의 GEMINI_API_KEY를 확인하세요"
+    return f"AI 분석 오류: {s[:120]}"

@@ -144,22 +144,27 @@ def fetch_news(ticker: str, market: str, name: str) -> list[dict]:
     return fetch_news_kr(name) if market == "KR" else fetch_news_us(ticker)
 
 
-def fetch_macro_news(max_items: int = 6) -> list[dict]:
-    """세계 경제 매크로 뉴스 (Google News RSS)."""
-    query = quote("글로벌 증시 경제")
-    url = f"https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko"
-    try:
+def fetch_macro_news_raw(max_items: int = 40) -> list[dict]:
+    """국내외 경제·증시 뉴스 원본 수집 (AI 큐레이션용). 링크 포함."""
+    queries = [
+        ("글로벌 증시 경제 금리 주식", "ko", "KR", "KR:ko"),
+        ("stock market economy federal reserve interest rate earnings", "en", "US", "US:en"),
+    ]
+    items: list[dict] = []
+    per = max_items // len(queries)
+    for q_str, hl, gl, ceid in queries:
+        url = (f"https://news.google.com/rss/search"
+               f"?q={quote(q_str)}&hl={hl}&gl={gl}&ceid={ceid}")
         feed = _rss_parse(url)
-        return [
-            {
-                "title": e.get("title", ""),
-                "source": (e.get("source") or {}).get("title", ""),
+        for e in feed.entries[:per]:
+            items.append({
+                "title":     e.get("title", ""),
+                "source":    (e.get("source") or {}).get("title", ""),
                 "published": e.get("published", ""),
-            }
-            for e in feed.entries[:max_items]
-        ]
-    except Exception:
-        return []
+                "link":      e.get("link", ""),
+                "region":    gl,
+            })
+    return items
 
 
 # ── 환율 ─────────────────────────────────────────────────────
@@ -173,3 +178,37 @@ def fetch_fx_rate() -> float:
     except Exception:
         pass
     return 1400.0  # fallback
+
+
+# ── 주요 시장 지표 ────────────────────────────────────────────
+
+def fetch_market_indicators() -> dict:
+    """주요 시장 지표 수집 — 가격 + 전일 대비 변화율(%)."""
+    syms = {
+        "sp500":  "^GSPC",
+        "nasdaq": "^IXIC",
+        "kospi":  "^KS11",
+        "vix":    "^VIX",
+        "us10y":  "^TNX",
+        "gold":   "GC=F",
+        "usdkrw": "KRW=X",
+        "wti":    "CL=F",
+    }
+    result: dict = {}
+    for key, sym in syms.items():
+        try:
+            closes = yf.Ticker(sym).history(period="5d")["Close"].dropna()
+            if len(closes) >= 2:
+                val  = round(float(closes.iloc[-1]), 2)
+                prev = float(closes.iloc[-2])
+                chg  = round((val - prev) / prev * 100, 2) if prev else None
+            elif len(closes) == 1:
+                val, chg = round(float(closes.iloc[-1]), 2), None
+            else:
+                val, chg = None, None
+            result[key]           = val
+            result[f"{key}_chg"]  = chg
+        except Exception:
+            result[key]           = None
+            result[f"{key}_chg"]  = None
+    return result
