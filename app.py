@@ -1,3 +1,4 @@
+import hashlib
 import html as _html
 import json
 import os
@@ -211,7 +212,37 @@ def analyze_cached(holding_json: str, price_json: str, news_json: str) -> dict:
 
 # ── 데이터 로드 / 저장 ───────────────────────────────────────
 
-PORTFOLIO_PATH = os.path.join(os.path.dirname(__file__), "portfolio.json")
+PORTFOLIO_PATH     = os.path.join(os.path.dirname(__file__), "portfolio.json")
+ANALYSIS_CACHE_PATH = os.path.join(os.path.dirname(__file__), "analysis_cache.json")
+
+
+def _holdings_hash(holdings: list) -> str:
+    key = json.dumps(sorted(holdings, key=lambda h: h["ticker"]), ensure_ascii=False, sort_keys=True)
+    return hashlib.md5(key.encode()).hexdigest()[:12]
+
+
+def load_analysis_cache(holdings: list) -> dict:
+    """파일 캐시에서 분석 결과 로드 — holdings 내용이 변경되면 자동 무효화."""
+    try:
+        with open(ANALYSIS_CACHE_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        if data.get("portfolio_hash") == _holdings_hash(holdings):
+            return data.get("results", {})
+    except (FileNotFoundError, json.JSONDecodeError, KeyError):
+        pass
+    return {}
+
+
+def save_analysis_cache(holdings: list, results: dict) -> None:
+    try:
+        with open(ANALYSIS_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump({
+                "portfolio_hash": _holdings_hash(holdings),
+                "analyzed_at":    datetime.now().isoformat(timespec="seconds"),
+                "results":        results,
+            }, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
 
 def load_portfolio() -> dict:
@@ -360,7 +391,13 @@ def _ind_card(key: str, val, chg, meta: dict) -> str:
 # ── 세션 상태 ────────────────────────────────────────────────
 if "page"             not in st.session_state: st.session_state.page = "dashboard"
 if "selected_ticker"  not in st.session_state: st.session_state.selected_ticker = None
-if "briefing_results" not in st.session_state: st.session_state.briefing_results = {}
+if "briefing_results" not in st.session_state:
+    if os.path.exists(PORTFOLIO_PATH):
+        with open(PORTFOLIO_PATH, encoding="utf-8") as _pf:
+            _init_holdings = json.load(_pf).get("holdings", [])
+    else:
+        _init_holdings = []
+    st.session_state.briefing_results = load_analysis_cache(_init_holdings)
 if "price_cache"      not in st.session_state: st.session_state.price_cache = {}
 if "do_briefing"      not in st.session_state: st.session_state.do_briefing = False
 
@@ -442,11 +479,12 @@ if st.session_state.page == "dashboard":
                 text=f"AI 분석: {name} ({i+1}/{n}) — 속도 제한 시 자동 재시도"
             )
         st.session_state.briefing_results = run_full_briefing(holdings, _progress)
+        save_analysis_cache(holdings, st.session_state.briefing_results)
         bar.empty()
         st.rerun()
 
     # ── 상단 요약 바 ─────────────────────────────────────────
-    c1, c2, c3, c4, c_brief, c_set = st.columns([2, 2, 2, 2, 1.2, 1.2])
+    c1, c2, c3, c4, c5, c_brief, c_set = st.columns([1.8, 1.8, 1.8, 1.8, 1.8, 1, 1])
 
     with c1:
         val = f"₩{kr_total:,.0f}" if kr_priced else "조회 필요"
@@ -464,6 +502,13 @@ if st.session_state.page == "dashboard":
         delta = f"{_sign(total_pnl_pct)}{total_pnl_pct:.2f}%" if (both_priced and total_eval) else None
         st.metric("합산 총자본", val, delta)
     with c4:
+        if both_priced and total_eval:
+            st.metric("총 수익/손실",
+                      f"{_sign(total_pnl)}₩{abs(total_pnl):,.0f}",
+                      f"{_sign(total_pnl_pct)}{total_pnl_pct:.2f}%")
+        else:
+            st.metric("총 수익/손실", "조회 필요")
+    with c5:
         st.metric("목표 수익률", f"{target:.1f}%",
                   f"현재 {_sign(total_pnl_pct)}{total_pnl_pct:.1f}%" if total_eval else "시세 조회 후 표시")
     with c_brief:
@@ -584,6 +629,34 @@ if st.session_state.page == "dashboard":
                 f'<div class="brief-caveat"><span>⚠</span><span>{_esc(caveat)}</span></div>'
                 if caveat else ""
             )
+
+            theory_tags = []
+            if r.get("elliott_wave"):
+                txt = _esc(r["elliott_wave"][:35]) + ("…" if len(r["elliott_wave"]) > 35 else "")
+                theory_tags.append(
+                    f'<span style="font-size:11px;background:rgba(99,102,241,0.12);'
+                    f'color:#818cf8;border:1px solid rgba(99,102,241,0.25);'
+                    f'border-radius:4px;padding:2px 7px;margin-right:4px">〜 {txt}</span>'
+                )
+            if r.get("chart_pattern"):
+                txt = _esc(r["chart_pattern"][:35]) + ("…" if len(r["chart_pattern"]) > 35 else "")
+                theory_tags.append(
+                    f'<span style="font-size:11px;background:rgba(16,185,129,0.12);'
+                    f'color:#34d399;border:1px solid rgba(16,185,129,0.25);'
+                    f'border-radius:4px;padding:2px 7px;margin-right:4px">◈ {txt}</span>'
+                )
+            if r.get("dow_phase"):
+                txt = _esc(r["dow_phase"][:35]) + ("…" if len(r["dow_phase"]) > 35 else "")
+                theory_tags.append(
+                    f'<span style="font-size:11px;background:rgba(245,158,11,0.12);'
+                    f'color:#fbbf24;border:1px solid rgba(245,158,11,0.25);'
+                    f'border-radius:4px;padding:2px 7px;margin-right:4px">↗ {txt}</span>'
+                )
+            theory_html = (
+                f'<div style="margin-top:10px;padding-top:8px;'
+                f'border-top:1px solid rgba(128,128,128,0.12)">{"".join(theory_tags)}</div>'
+            ) if theory_tags else ""
+
             cards.append(f"""
 <div class="brief-card">
   <div class="brief-hd">
@@ -595,6 +668,7 @@ if st.session_state.page == "dashboard":
   </div>
   <ol class="brief-list">{items_html}</ol>
   {caveat_html}
+  {theory_html}
 </div>""")
 
         st.markdown(
@@ -648,6 +722,9 @@ if st.session_state.page == "dashboard":
 # 화면 2: 종목 상세 분석
 # ════════════════════════════════════════════════════════════
 elif st.session_state.page == "detail":
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+
     ticker = st.session_state.selected_ticker
     if not ticker:
         st.session_state.page = "dashboard"; st.rerun()
@@ -671,24 +748,155 @@ elif st.session_state.page == "detail":
             price_data = fetch_price(ticker, holding["market"])
             news       = fetch_news(ticker, holding["market"], holding.get("name", ticker))
             result     = analyze_cached(
-                json.dumps(holding,     ensure_ascii=False, sort_keys=True),
-                json.dumps(price_data,  ensure_ascii=False, sort_keys=True),
-                json.dumps(news,        ensure_ascii=False, sort_keys=True),
+                json.dumps(holding,    ensure_ascii=False, sort_keys=True),
+                json.dumps(price_data, ensure_ascii=False, sort_keys=True),
+                json.dumps(news,       ensure_ascii=False, sort_keys=True),
             )
-            st.session_state.price_cache[ticker]     = price_data
+            st.session_state.price_cache[ticker]      = price_data
             st.session_state.briefing_results[ticker] = result
 
     price_data = st.session_state.price_cache.get(ticker, {})
     result     = st.session_state.briefing_results.get(ticker, {})
 
+    # ── 핵심 지표 요약 바 ──
     if price_data.get("price"):
-        m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("현재가",    price_data["price_display"])
-        m2.metric("RSI(14)",   f"{price_data.get('rsi','—')}")
-        m3.metric("20일 MA",   f"{price_data.get('ma20','—')}")
-        m4.metric("60일 MA",   f"{price_data.get('ma60','—')}")
-        m5.metric("52주 위치", f"{price_data.get('week52_pos','—')}%")
+        m1, m2, m3, m4, m5, m6 = st.columns(6)
+        m1.metric("현재가",      price_data["price_display"])
+        m2.metric("RSI(14)",     f"{price_data.get('rsi', '—')}")
+        m3.metric("MA20",        f"{price_data.get('ma20', '—')}")
+        m4.metric("MA60",        f"{price_data.get('ma60', '—')}")
+        m5.metric("52주 위치",   f"{price_data.get('week52_pos', '—')}%")
+        m6.metric("거래량 비율", f"{price_data.get('volume_ratio', '—')}x")
 
+    # ── Plotly 캔들스틱 차트 ──
+    ohlcv = price_data.get("ohlcv_60", [])
+    if ohlcv:
+        period_map = {"1개월": 21, "3개월": 63, "6개월": 126, "전체": len(ohlcv)}
+        period_sel = st.radio("기간", list(period_map.keys()),
+                              index=1, horizontal=True, key="chart_period")
+        n    = min(period_map[period_sel], len(ohlcv))
+        data = ohlcv[-n:]
+
+        dates  = [d["date"]   for d in data]
+        opens  = [d["open"]   for d in data]
+        highs  = [d["high"]   for d in data]
+        lows   = [d["low"]    for d in data]
+        closes = [d["close"]  for d in data]
+        vols   = [d["volume"] for d in data]
+        colors = ["#26a69a" if closes[i] >= opens[i] else "#ef5350"
+                  for i in range(len(data))]
+
+        fig = make_subplots(
+            rows=4, cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.03,
+            row_heights=[0.55, 0.15, 0.15, 0.15],
+            subplot_titles=("", "거래량", "MACD", "RSI"),
+        )
+
+        fig.add_trace(go.Candlestick(
+            x=dates, open=opens, high=highs, low=lows, close=closes,
+            name="캔들",
+            increasing_line_color="#26a69a",
+            decreasing_line_color="#ef5350",
+        ), row=1, col=1)
+
+        # 전체 60봉으로 지표 계산 후 마지막 n봉만 표시 — EWM warmup 보장
+        full_s = pd.Series(
+            [d["close"] for d in ohlcv],
+            index=pd.to_datetime([d["date"] for d in ohlcv])
+        )
+        for length, color, ma_name in [
+            (5,   "#FFD600", "MA5"),
+            (20,  "#2979FF", "MA20"),
+            (60,  "#FF6D00", "MA60"),
+            (120, "#AB47BC", "MA120"),
+        ]:
+            if len(full_s) >= length:
+                ma = full_s.rolling(length).mean().iloc[-n:]
+                fig.add_trace(go.Scatter(
+                    x=dates, y=ma.values, name=ma_name,
+                    line=dict(color=color, width=1.2),
+                ), row=1, col=1)
+
+        if len(full_s) >= 20:
+            bb_mid_f = full_s.rolling(20).mean()
+            bb_std_f = full_s.rolling(20).std()
+            bb_upper = (bb_mid_f + 2 * bb_std_f).iloc[-n:]
+            bb_lower = (bb_mid_f - 2 * bb_std_f).iloc[-n:]
+            fig.add_trace(go.Scatter(
+                x=dates, y=bb_upper.values, name="BB상단",
+                line=dict(color="rgba(128,128,128,0.5)", width=1, dash="dot"),
+            ), row=1, col=1)
+            fig.add_trace(go.Scatter(
+                x=dates, y=bb_lower.values, name="BB하단",
+                line=dict(color="rgba(128,128,128,0.5)", width=1, dash="dot"),
+                fill="tonexty", fillcolor="rgba(128,128,128,0.05)",
+            ), row=1, col=1)
+
+        if price_data.get("support"):
+            fig.add_hline(y=price_data["support"],
+                          line=dict(color="#26a69a", width=1, dash="dash"),
+                          annotation_text="지지", row=1, col=1)
+        if price_data.get("resistance"):
+            fig.add_hline(y=price_data["resistance"],
+                          line=dict(color="#ef5350", width=1, dash="dash"),
+                          annotation_text="저항", row=1, col=1)
+
+        fig.add_trace(go.Bar(
+            x=dates, y=vols, name="거래량",
+            marker_color=colors, showlegend=False,
+        ), row=2, col=1)
+
+        if len(full_s) >= 26:
+            exp12_f   = full_s.ewm(span=12).mean()
+            exp26_f   = full_s.ewm(span=26).mean()
+            macd_f    = exp12_f - exp26_f
+            signal_f  = macd_f.ewm(span=9).mean()
+            hist_f    = (macd_f - signal_f).iloc[-n:]
+            macd_line = macd_f.iloc[-n:]
+            signal    = signal_f.iloc[-n:]
+            hist_colors = ["#26a69a" if v >= 0 else "#ef5350" for v in hist_f.values]
+            fig.add_trace(go.Bar(
+                x=dates, y=hist_f.values, name="MACD Hist",
+                marker_color=hist_colors, showlegend=False,
+            ), row=3, col=1)
+            fig.add_trace(go.Scatter(
+                x=dates, y=macd_line.values, name="MACD",
+                line=dict(color="#2979FF", width=1.2),
+            ), row=3, col=1)
+            fig.add_trace(go.Scatter(
+                x=dates, y=signal.values, name="Signal",
+                line=dict(color="#FF6D00", width=1.2),
+            ), row=3, col=1)
+
+        if len(full_s) >= 14:
+            delta_f  = full_s.diff()
+            gain_f   = delta_f.clip(lower=0).rolling(14).mean()
+            loss_f   = (-delta_f.clip(upper=0)).rolling(14).mean()
+            rs_f     = gain_f / loss_f
+            rsi_line = (100 - (100 / (1 + rs_f))).iloc[-n:]
+            fig.add_trace(go.Scatter(
+                x=dates, y=rsi_line.values, name="RSI",
+                line=dict(color="#AB47BC", width=1.2),
+            ), row=4, col=1)
+            fig.add_hline(y=70, line=dict(color="#ef5350", width=0.8, dash="dot"), row=4, col=1)
+            fig.add_hline(y=30, line=dict(color="#26a69a", width=0.8, dash="dot"), row=4, col=1)
+
+        fig.update_layout(
+            height=700,
+            xaxis_rangeslider_visible=False,
+            showlegend=True,
+            legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0),
+            margin=dict(l=0, r=0, t=30, b=0),
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+        )
+        fig.update_xaxes(showgrid=True, gridcolor="rgba(128,128,128,0.1)")
+        fig.update_yaxes(showgrid=True, gridcolor="rgba(128,128,128,0.1)")
+        st.plotly_chart(fig, use_container_width=True, theme="streamlit")
+
+    # ── AI 분석 결과 ──
     if result.get("opinion"):
         st.divider()
         opinion   = result["opinion"]
@@ -698,11 +906,84 @@ elif st.session_state.page == "detail":
             f'<span class="badge {badge_cls}" style="font-size:15px">{opinion}</span>',
             unsafe_allow_html=True,
         )
+
+        # 지표 신호 테이블
+        def _calc_signals(pd_):
+            rows = []
+            rsi_ = pd_.get("rsi")
+            if rsi_ is not None:
+                if rsi_ < 30:   st_, ic = "과매도(반등 기대)", "🟢"
+                elif rsi_ > 70: st_, ic = "과매수(조정 주의)", "🔴"
+                else:           st_, ic = "중립", "⚪"
+                rows.append({"지표": "RSI(14)", "상태": f"{ic} {st_}", "값": str(rsi_)})
+            macd_ = pd_.get("macd") or {}
+            if macd_:
+                h_ = macd_.get("histogram", 0) or 0
+                if h_ > 0:   st_, ic = "상승 모멘텀", "🟢"
+                elif h_ < 0: st_, ic = "하락 모멘텀", "🔴"
+                else:        st_, ic = "중립", "⚪"
+                rows.append({"지표": "MACD", "상태": f"{ic} {st_}", "값": str(round(h_, 4))})
+            bb_ = pd_.get("bollinger") or {}
+            price_ = pd_.get("price", 0)
+            if bb_ and price_:
+                upper_ = bb_.get("upper", 0)
+                lower_ = bb_.get("lower", 0)
+                mid_   = bb_.get("middle", 0)
+                if price_ > upper_:   st_, ic = "상단 돌파(과매수)", "🔴"
+                elif price_ < lower_: st_, ic = "하단 이탈(과매도)", "🟢"
+                elif price_ > mid_:   st_, ic = "중단 위(강세)", "🟢"
+                else:                 st_, ic = "중단 아래(약세)", "🔴"
+                rows.append({"지표": "볼린저밴드", "상태": f"{ic} {st_}", "값": str(price_)})
+            ma5_, ma20_, ma60_ = pd_.get("ma5"), pd_.get("ma20"), pd_.get("ma60")
+            if ma5_ and ma20_ and ma60_:
+                if ma5_ > ma20_ > ma60_:   st_, ic = "정배열(상승 추세)", "🟢"
+                elif ma5_ < ma20_ < ma60_: st_, ic = "역배열(하락 추세)", "🔴"
+                else:                      st_, ic = "혼조", "⚪"
+                rows.append({"지표": "이동평균 배열", "상태": f"{ic} {st_}", "값": f"MA5:{ma5_}"})
+            sup_ = pd_.get("support")
+            res_ = pd_.get("resistance")
+            if sup_ and res_ and price_:
+                d_sup = abs(price_ - sup_) / price_ * 100
+                d_res = abs(res_ - price_) / price_ * 100
+                if d_sup < d_res: st_, ic = f"지지선 근접({d_sup:.1f}%)", "🟢"
+                else:             st_, ic = f"저항선 근접({d_res:.1f}%)", "🔴"
+                rows.append({"지표": "지지/저항", "상태": f"{ic} {st_}",
+                             "값": f"지지:{sup_} / 저항:{res_}"})
+            vr = pd_.get("volume_ratio")
+            if vr is not None:
+                if vr >= 1.5:   st_, ic = f"급증({vr:.1f}x)", "🟢"
+                elif vr >= 1.0: st_, ic = f"증가({vr:.1f}x)", "🟢"
+                elif vr >= 0.7: st_, ic = f"보통({vr:.1f}x)", "⚪"
+                else:           st_, ic = f"감소({vr:.1f}x)", "🔴"
+                rows.append({"지표": "거래량(5일/20일)", "상태": f"{ic} {st_}",
+                             "값": f"{vr:.2f}x"})
+            return rows
+
+        signals = _calc_signals(price_data)
+        if signals:
+            st.dataframe(pd.DataFrame(signals), use_container_width=True, hide_index=True)
+
+        st.markdown("**AI 분석 근거**")
         for r_ in result.get("reasons", []):
             st.markdown(f"- {r_}")
+
+        if any(result.get(k) for k in ["elliott_wave", "chart_pattern", "dow_phase"]):
+            with st.expander("📐 이론 분석 상세", expanded=True):
+                col_e, col_c, col_d = st.columns(3)
+                with col_e:
+                    st.markdown("**〜 엘리어트 파동**")
+                    st.info(result.get("elliott_wave") or "분석 없음")
+                with col_c:
+                    st.markdown("**◈ 차트 패턴**")
+                    st.success(result.get("chart_pattern") or "뚜렷한 패턴 없음")
+                with col_d:
+                    st.markdown("**↗ 다우 이론 국면**")
+                    st.warning(result.get("dow_phase") or "분석 없음")
+
         if result.get("counterpoint"):
             st.warning(f"반론: {result['counterpoint']}")
         st.caption("※ 투자 결정은 본인 책임입니다.")
+
     elif result.get("error"):
         st.error(result["error"])
     else:
@@ -807,6 +1088,10 @@ elif st.session_state.page == "settings":
                 )
             new_holdings.append(h)
 
+        old_hash = _holdings_hash(portfolio.get("holdings", []))
+        new_hash = _holdings_hash(new_holdings)
+        holdings_changed = (old_hash != new_hash)
+
         save_portfolio({
             **portfolio,
             "cash_krw":          int(new_cash_krw),
@@ -814,6 +1099,11 @@ elif st.session_state.page == "settings":
             "target_return_pct": float(new_target),
             "holdings":          new_holdings,
         })
-        st.session_state.price_cache      = {}
-        st.session_state.briefing_results = {}
+        st.session_state.price_cache = {}
+        if holdings_changed:
+            st.session_state.briefing_results = {}
+            try:
+                os.remove(ANALYSIS_CACHE_PATH)
+            except FileNotFoundError:
+                pass
         st.success("저장 완료! 대시보드로 돌아가면 변경사항이 반영됩니다.")

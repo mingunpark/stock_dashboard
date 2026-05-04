@@ -26,19 +26,35 @@ def _d130() -> str:
 
 # ── 시세 + 기술지표 ──────────────────────────────────────────
 
+def _find_swings(close_series, window=5):
+    highs, lows = [], []
+    for i in range(window, len(close_series) - window):
+        window_slice = close_series.iloc[i - window:i + window + 1]
+        if close_series.iloc[i] == window_slice.max():
+            highs.append({"date": close_series.index[i].strftime("%Y-%m-%d"),
+                          "price": round(float(close_series.iloc[i]), 2)})
+        if close_series.iloc[i] == window_slice.min():
+            lows.append({"date": close_series.index[i].strftime("%Y-%m-%d"),
+                         "price": round(float(close_series.iloc[i]), 2)})
+    return highs[-3:], lows[-3:]
+
+
 def fetch_price_kr(ticker: str) -> dict:
-    """pykrx로 KR 종목 OHLCV + RSI/MA/52주 위치 수집."""
+    """pykrx로 KR 종목 OHLCV + RSI/MA/52주 위치 + 확장 지표 수집."""
     try:
         df = krx.get_market_ohlcv(_d130(), _t1(), ticker)
         if df.empty:
             return {"ticker": ticker, "market": "KR", "price": 0,
                     "price_display": "데이터 없음", "error": "T+1 대기 중 또는 휴장"}
 
-        close = df["종가"].astype(float)
+        close  = df["종가"].astype(float)
+        high   = df["고가"].astype(float)
+        low    = df["저가"].astype(float)
+        volume = df["거래량"].astype(float)
         current = float(close.iloc[-1])
 
         rsi_s = ta.rsi(close, length=14)
-        rsi = round(float(rsi_s.iloc[-1]), 1) if rsi_s is not None and len(rsi_s) > 0 else None
+        rsi  = round(float(rsi_s.iloc[-1]), 1) if rsi_s is not None and len(rsi_s) > 0 else None
         ma20 = round(float(close.rolling(20).mean().iloc[-1]), 0) if len(close) >= 20 else None
         ma60 = round(float(close.rolling(60).mean().iloc[-1]), 0) if len(close) >= 60 else None
 
@@ -47,6 +63,65 @@ def fetch_price_kr(ticker: str) -> dict:
         week52_pos = round((current - low52) / (high52 - low52) * 100, 1) if high52 != low52 else 50.0
 
         name = krx.get_market_ticker_name(ticker)
+
+        ma5   = round(float(close.rolling(5).mean().iloc[-1]),   0) if len(close) >= 5   else None
+        ma120 = round(float(close.rolling(120).mean().iloc[-1]), 0) if len(close) >= 120 else None
+
+        bb = ta.bbands(close, length=20, std=2)
+        bollinger = None
+        if bb is not None:
+            _bbu = next((c for c in bb.columns if c.startswith("BBU")), None)
+            _bbm = next((c for c in bb.columns if c.startswith("BBM")), None)
+            _bbl = next((c for c in bb.columns if c.startswith("BBL")), None)
+            if _bbu and not bb[_bbu].isna().iloc[-1]:
+                bollinger = {
+                    "upper":  round(float(bb[_bbu].iloc[-1]), 0),
+                    "middle": round(float(bb[_bbm].iloc[-1]), 0),
+                    "lower":  round(float(bb[_bbl].iloc[-1]), 0),
+                }
+
+        macd_df = ta.macd(close, fast=12, slow=26, signal=9)
+        macd = None
+        if macd_df is not None and not macd_df["MACD_12_26_9"].isna().iloc[-1]:
+            macd = {
+                "macd":      round(float(macd_df["MACD_12_26_9"].iloc[-1]),  4),
+                "signal":    round(float(macd_df["MACDs_12_26_9"].iloc[-1]), 4),
+                "histogram": round(float(macd_df["MACDh_12_26_9"].iloc[-1]), 4),
+            }
+
+        stoch = ta.stoch(high, low, close, k=14, d=3, smooth_k=3)
+        stochastic = None
+        if stoch is not None and not stoch["STOCHk_14_3_3"].isna().iloc[-1]:
+            stochastic = {
+                "k": round(float(stoch["STOCHk_14_3_3"].iloc[-1]), 1),
+                "d": round(float(stoch["STOCHd_14_3_3"].iloc[-1]), 1),
+            }
+
+        recent = close.iloc[-60:]
+        resistance = round(float(recent.nlargest(3).mean()),  0)
+        support    = round(float(recent.nsmallest(3).mean()), 0)
+
+        _vol20 = volume.iloc[-20:].mean() if len(volume) >= 20 else 0
+        volume_ratio = round(float(volume.iloc[-5:].mean() / _vol20), 2) if _vol20 > 0 else None
+        volume_surge = bool(volume.iloc[-3:].mean() >= _vol20 * 1.5) if _vol20 > 0 else False
+
+        ma20_series = close.rolling(20).mean()
+        slope = float(ma20_series.iloc[-1] - ma20_series.iloc[-5])
+        trend_direction = "up" if slope > 0 else ("down" if slope < 0 else "sideways")
+
+        swing_highs, swing_lows = _find_swings(close)
+
+        ohlcv_60 = [
+            {
+                "date":   idx.strftime("%Y-%m-%d"),
+                "open":   round(float(row["시가"]),   0),
+                "high":   round(float(row["고가"]),   0),
+                "low":    round(float(row["저가"]),   0),
+                "close":  round(float(row["종가"]),   0),
+                "volume": int(row["거래량"]),
+            }
+            for idx, row in df.iloc[-60:].iterrows()
+        ]
 
         return {
             "ticker": ticker, "market": "KR", "name": name,
@@ -57,6 +132,13 @@ def fetch_price_kr(ticker: str) -> dict:
             "week52_pos": week52_pos,
             "date": df.index[-1].strftime("%Y-%m-%d"),
             "error": None,
+            "ma5": ma5, "ma120": ma120,
+            "bollinger": bollinger, "macd": macd, "stochastic": stochastic,
+            "support": support, "resistance": resistance,
+            "volume_ratio": volume_ratio, "volume_surge": volume_surge,
+            "trend_direction": trend_direction,
+            "swing_highs": swing_highs, "swing_lows": swing_lows,
+            "ohlcv_60": ohlcv_60,
         }
     except Exception as e:
         return {"ticker": ticker, "market": "KR", "price": 0,
@@ -64,7 +146,7 @@ def fetch_price_kr(ticker: str) -> dict:
 
 
 def fetch_price_us(ticker: str) -> dict:
-    """yfinance로 US 종목 OHLCV + RSI/MA/52주 위치 수집."""
+    """yfinance로 US 종목 OHLCV + RSI/MA/52주 위치 + 확장 지표 수집."""
     try:
         obj  = yf.Ticker(ticker)
         hist = obj.history(period="1y")
@@ -72,17 +154,79 @@ def fetch_price_us(ticker: str) -> dict:
             return {"ticker": ticker, "market": "US", "price": 0,
                     "price_display": "데이터 없음", "error": "yfinance 응답 없음"}
 
-        close = hist["Close"].astype(float)
+        close  = hist["Close"].astype(float)
+        high   = hist["High"].astype(float)
+        low    = hist["Low"].astype(float)
+        volume = hist["Volume"].astype(float)
         current = float(close.iloc[-1])
 
         rsi_s = ta.rsi(close, length=14)
-        rsi = round(float(rsi_s.iloc[-1]), 1) if rsi_s is not None and len(rsi_s) > 0 else None
+        rsi  = round(float(rsi_s.iloc[-1]), 1) if rsi_s is not None and len(rsi_s) > 0 else None
         ma20 = round(float(close.rolling(20).mean().iloc[-1]), 2) if len(close) >= 20 else None
         ma60 = round(float(close.rolling(60).mean().iloc[-1]), 2) if len(close) >= 60 else None
 
         high52 = float(close.max())
         low52  = float(close.min())
         week52_pos = round((current - low52) / (high52 - low52) * 100, 1) if high52 != low52 else 50.0
+
+        ma5   = round(float(close.rolling(5).mean().iloc[-1]),   2) if len(close) >= 5   else None
+        ma120 = round(float(close.rolling(120).mean().iloc[-1]), 2) if len(close) >= 120 else None
+
+        bb = ta.bbands(close, length=20, std=2)
+        bollinger = None
+        if bb is not None:
+            _bbu = next((c for c in bb.columns if c.startswith("BBU")), None)
+            _bbm = next((c for c in bb.columns if c.startswith("BBM")), None)
+            _bbl = next((c for c in bb.columns if c.startswith("BBL")), None)
+            if _bbu and not bb[_bbu].isna().iloc[-1]:
+                bollinger = {
+                    "upper":  round(float(bb[_bbu].iloc[-1]), 2),
+                    "middle": round(float(bb[_bbm].iloc[-1]), 2),
+                    "lower":  round(float(bb[_bbl].iloc[-1]), 2),
+                }
+
+        macd_df = ta.macd(close, fast=12, slow=26, signal=9)
+        macd = None
+        if macd_df is not None and not macd_df["MACD_12_26_9"].isna().iloc[-1]:
+            macd = {
+                "macd":      round(float(macd_df["MACD_12_26_9"].iloc[-1]),  4),
+                "signal":    round(float(macd_df["MACDs_12_26_9"].iloc[-1]), 4),
+                "histogram": round(float(macd_df["MACDh_12_26_9"].iloc[-1]), 4),
+            }
+
+        stoch = ta.stoch(high, low, close, k=14, d=3, smooth_k=3)
+        stochastic = None
+        if stoch is not None and not stoch["STOCHk_14_3_3"].isna().iloc[-1]:
+            stochastic = {
+                "k": round(float(stoch["STOCHk_14_3_3"].iloc[-1]), 1),
+                "d": round(float(stoch["STOCHd_14_3_3"].iloc[-1]), 1),
+            }
+
+        recent = close.iloc[-60:]
+        resistance = round(float(recent.nlargest(3).mean()),  2)
+        support    = round(float(recent.nsmallest(3).mean()), 2)
+
+        _vol20 = volume.iloc[-20:].mean() if len(volume) >= 20 else 0
+        volume_ratio = round(float(volume.iloc[-5:].mean() / _vol20), 2) if _vol20 > 0 else None
+        volume_surge = bool(volume.iloc[-3:].mean() >= _vol20 * 1.5) if _vol20 > 0 else False
+
+        ma20_series = close.rolling(20).mean()
+        slope = float(ma20_series.iloc[-1] - ma20_series.iloc[-5])
+        trend_direction = "up" if slope > 0 else ("down" if slope < 0 else "sideways")
+
+        swing_highs, swing_lows = _find_swings(close)
+
+        ohlcv_60 = [
+            {
+                "date":   idx.strftime("%Y-%m-%d"),
+                "open":   round(float(row["Open"]),   2),
+                "high":   round(float(row["High"]),   2),
+                "low":    round(float(row["Low"]),    2),
+                "close":  round(float(row["Close"]),  2),
+                "volume": int(row["Volume"]),
+            }
+            for idx, row in hist.iloc[-60:].iterrows()
+        ]
 
         return {
             "ticker": ticker, "market": "US",
@@ -94,6 +238,13 @@ def fetch_price_us(ticker: str) -> dict:
             "week52_pos": week52_pos,
             "date": hist.index[-1].strftime("%Y-%m-%d"),
             "error": None,
+            "ma5": ma5, "ma120": ma120,
+            "bollinger": bollinger, "macd": macd, "stochastic": stochastic,
+            "support": support, "resistance": resistance,
+            "volume_ratio": volume_ratio, "volume_surge": volume_surge,
+            "trend_direction": trend_direction,
+            "swing_highs": swing_highs, "swing_lows": swing_lows,
+            "ohlcv_60": ohlcv_60,
         }
     except Exception as e:
         return {"ticker": ticker, "market": "US", "price": 0,

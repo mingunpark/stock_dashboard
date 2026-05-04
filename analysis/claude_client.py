@@ -34,40 +34,89 @@ def build_prompt(holding: dict, price_data: dict, news: list[dict]) -> str:
     week52_hi  = price_data.get("week52_high") or "N/A"
     week52_lo  = price_data.get("week52_low") or "N/A"
 
+    ma5         = price_data.get("ma5") or "N/A"
+    ma120       = price_data.get("ma120") or "N/A"
+    bb          = price_data.get("bollinger") or {}
+    macd_d      = price_data.get("macd") or {}
+    stoch       = price_data.get("stochastic") or {}
+    support     = price_data.get("support") or "N/A"
+    resistance  = price_data.get("resistance") or "N/A"
+    vol_ratio   = price_data.get("volume_ratio") or "N/A"
+    vol_surge   = price_data.get("volume_surge", False)
+    trend_dir   = price_data.get("trend_direction", "N/A")
+    swing_highs = price_data.get("swing_highs", [])
+    swing_lows  = price_data.get("swing_lows", [])
+    ohlcv_60    = price_data.get("ohlcv_60", [])
+
+    def _fmt_swings(swings):
+        if not swings:
+            return "데이터 부족"
+        return " → ".join(f"{s['date']}({s['price']:,.0f})" for s in swings)
+
+    _pfmt = ",.0f" if market == "KR" else ",.2f"
+    ohlcv_text = "\n".join(
+        f"  {c['date']}: O={format(c['open'], _pfmt)} H={format(c['high'], _pfmt)} "
+        f"L={format(c['low'], _pfmt)} C={format(c['close'], _pfmt)} V={c['volume']:,}"
+        for c in ohlcv_60[-20:]
+    ) or "  데이터 없음"
+
     news_text = "\n".join(
         f"- [{n.get('source', '')}] {n.get('title', '')}"
         for n in news if n.get("title")
     ) or "- 수집된 뉴스 없음 (기술지표 기반으로만 분석)"
 
-    return f"""당신은 개인 투자자를 위한 주식 분석 AI입니다. 최신 뉴스와 기술지표를 바탕으로 객관적이고 구체적인 분석을 제공하세요.
+    return f"""당신은 개인 투자자를 위한 주식 기술적 분석 AI입니다.
+제공된 기술지표, 가격 패턴, 뉴스를 종합하여 객관적이고 구체적인 분석을 제공하세요.
 
 종목 정보:
 - 종목코드: {ticker} ({name}) | 시장: {market}
 - 현재가: {price_display} | 평균단가: {avg_display} | 보유 수량: {qty}주
-- RSI(14): {rsi} (30 이하=과매도, 70 이상=과매수)
-- 20일 이동평균: {ma20} | 60일 이동평균: {ma60}
-- 52주 범위: {week52_lo} ~ {week52_hi}
-- 52주 위치: {week52_pos}% (0%=52주 저점, 100%=52주 고점)
+
+기술지표:
+- RSI(14): {rsi} (30↓ 과매도 / 70↑ 과매수)
+- MA5: {ma5} | MA20: {ma20} | MA60: {ma60} | MA120: {ma120}
+- 볼린저밴드: 상단 {bb.get('upper','N/A')} / 중단 {bb.get('middle','N/A')} / 하단 {bb.get('lower','N/A')}
+- MACD: {macd_d.get('macd','N/A')} / Signal: {macd_d.get('signal','N/A')} / Histogram: {macd_d.get('histogram','N/A')}
+- 스토캐스틱 %K: {stoch.get('k','N/A')} / %D: {stoch.get('d','N/A')}
+- 52주 범위: {week52_lo} ~ {week52_hi} | 52주 위치: {week52_pos}%
+- 지지선: {support} | 저항선: {resistance}
+- 거래량 비율(5일/20일): {vol_ratio}배 | 거래량 급증: {"있음" if vol_surge else "없음"}
+
+추세 및 파동 분석:
+- 중기 추세 방향: {trend_dir} (MA20 기울기 기반)
+- 스윙 고점 시퀀스 (오래된→최근): {_fmt_swings(swing_highs)}
+- 스윙 저점 시퀀스 (오래된→최근): {_fmt_swings(swing_lows)}
+
+최근 20봉 OHLCV:
+{ohlcv_text}
 
 최근 뉴스:
 {news_text}
 
-위 데이터를 종합 분석하여 반드시 아래 형식으로만 답변하세요. 다른 설명 없이 이 형식만 출력하세요:
+위 데이터를 종합 분석하여 반드시 아래 형식으로만 답변하세요.
+다른 설명 없이 이 형식만 출력하세요:
 
 [의견: 매수/매도/보유]
-근거 1: (뉴스 또는 지표 기반 구체적 근거)
-근거 2: (뉴스 또는 지표 기반 구체적 근거)
-근거 3: (뉴스 또는 지표 기반 구체적 근거)
-주의할 반론: (반대 의견 또는 위험 요소)
+근거 1: (RSI/MA/볼린저/MACD/스토캐스틱 등 기술지표 기반 — 수치 명시)
+근거 2: (캔들/차트 패턴 기반 — 패턴명과 위치 명시)
+근거 3: (다우이론/엘리어트/추세 기반 — 현재 국면 판단)
+근거 4: (뉴스/거래량/매크로 기반)
+엘리어트 파동 판단: (스윙 고점/저점 시퀀스를 보고 현재 몇 파에 위치하는지 추정. 상승 5파 구조인지 조정 ABC인지 명시. 확신 없으면 "판단 어려움" 기재)
+차트 패턴 판단: (최근 20봉 OHLCV에서 감지되는 패턴 명시. 헤드앤숄더/이중천장·바닥/삼각수렴/컵앤핸들/깃발형 등. 없으면 "뚜렷한 패턴 없음" 기재)
+다우 이론 국면: (스윙 고저점 흐름으로 현재 추세 국면 판단. "고점·저점 모두 상승 → 상승추세 확인" 형식으로 기재. 분산/축적 국면이면 명시)
+주의할 반론: (반대 신호 또는 위험 요소)
 ※ 투자 결정은 본인 책임입니다."""
 
 
 # ── 응답 파싱 ─────────────────────────────────────────────────
 
 def parse_response(raw: str) -> dict:
-    opinion = None
-    reasons = []
-    counterpoint = None
+    opinion       = None
+    reasons       = []
+    counterpoint  = None
+    elliott_wave  = None
+    chart_pattern = None
+    dow_phase     = None
 
     for line in raw.strip().splitlines():
         line = line.strip()
@@ -85,13 +134,25 @@ def parse_response(raw: str) -> dict:
         elif line.startswith("주의할 반론") and ":" in line:
             _, body = line.split(":", 1)
             counterpoint = body.strip()
+        elif line.startswith("엘리어트 파동 판단") and ":" in line:
+            _, body = line.split(":", 1)
+            elliott_wave = body.strip()
+        elif line.startswith("차트 패턴 판단") and ":" in line:
+            _, body = line.split(":", 1)
+            chart_pattern = body.strip()
+        elif line.startswith("다우 이론 국면") and ":" in line:
+            _, body = line.split(":", 1)
+            dow_phase = body.strip()
 
     return {
-        "opinion": opinion,
-        "reasons": reasons,
-        "counterpoint": counterpoint,
-        "raw": raw,
-        "error": None,
+        "opinion":       opinion,
+        "reasons":       reasons,
+        "counterpoint":  counterpoint,
+        "elliott_wave":  elliott_wave,
+        "chart_pattern": chart_pattern,
+        "dow_phase":     dow_phase,
+        "raw":           raw,
+        "error":         None,
     }
 
 

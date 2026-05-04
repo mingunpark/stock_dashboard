@@ -1,39 +1,70 @@
 {
   "target_return_pct": 15.0,
-  "cash_krw": 5000000,
+  "cash_krw": 0,
   "cash_usd": 0.0,
   "holdings": [
     {
       "ticker": "005930",
-      "market": "KR",
       "name": "삼성전자",
-      "sector": "반도체",
-      "quantity": 100,
-      "avg_price_krw": 72000
+      "market": "KR",
+      "quantity": 66,
+      "avg_price_krw": 164932
     },
     {
       "ticker": "000660",
-      "market": "KR",
       "name": "SK하이닉스",
-      "sector": "반도체",
-      "quantity": 50,
-      "avg_price_krw": 180000
+      "market": "KR",
+      "quantity": 11,
+      "avg_price_krw": 960081
     },
     {
-      "ticker": "NVDA",
-      "market": "US",
-      "name": "엔비디아",
-      "sector": "반도체",
-      "quantity": 10,
-      "avg_price_usd": 850.00
+      "ticker": "032820",
+      "name": "우리기술",
+      "market": "KR",
+      "quantity": 260,
+      "avg_price_krw": 22981
     },
     {
-      "ticker": "AAPL",
-      "market": "US",
-      "name": "애플",
-      "sector": "빅테크",
-      "quantity": 20,
-      "avg_price_usd": 175.00
+      "ticker": "036890",
+      "name": "진성티이씨",
+      "market": "KR",
+      "quantity": 218,
+      "avg_price_krw": 18300
+    },
+    {
+      "ticker": "166090",
+      "name": "하나머티리얼즈",
+      "market": "KR",
+      "quantity": 76,
+      "avg_price_krw": 73771
+    },
+    {
+      "ticker": "209640",
+      "name": "와이제이링크",
+      "market": "KR",
+      "quantity": 980,
+      "avg_price_krw": 7153
+    },
+    {
+      "ticker": "034020",
+      "name": "두산에너빌리티",
+      "market": "KR",
+      "quantity": 49,
+      "avg_price_krw": 99996
+    },
+    {
+      "ticker": "067310",
+      "name": "하나마이크론",
+      "market": "KR",
+      "quantity": 130,
+      "avg_price_krw": 40950
+    },
+    {
+      "ticker": "007660",
+      "name": "이수페타시스",
+      "market": "KR",
+      "quantity": 31,
+      "avg_price_krw": 157000
     }
   ]
 }
