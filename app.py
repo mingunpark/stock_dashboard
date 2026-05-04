@@ -386,12 +386,35 @@ def _cost(h: dict) -> float:
     return h["avg_price_usd"] * qty * fx_rate
 
 
-total_eval    = sum(_eval(h) for h in holdings)
-total_cost    = sum(_cost(h) for h in holdings)
+# 국장 계산
+kr_eval    = sum(_eval(h) for h in kr_h)
+kr_cost    = sum(_cost(h) for h in kr_h)
+kr_pnl     = kr_eval - kr_cost
+kr_pnl_pct = (kr_pnl / kr_cost * 100) if kr_cost else 0
+kr_cash    = portfolio.get("cash_krw", 0)
+kr_priced  = (kr_eval > 0) if kr_h else True   # 종목 없으면 조회 불필요
+kr_total   = kr_eval + kr_cash                  # 원화
+
+# 미장 계산 (전부 원화 환산)
+us_eval    = sum(_eval(h) for h in us_h)
+us_cost    = sum(_cost(h) for h in us_h)
+us_pnl     = us_eval - us_cost
+us_pnl_pct = (us_pnl / us_cost * 100) if us_cost else 0
+cash_usd   = portfolio.get("cash_usd", 0.0)
+us_priced  = (us_eval > 0) if us_h else True
+us_total   = us_eval + cash_usd * fx_rate       # 원화 환산
+
+# 합산
+total_eval    = kr_eval + us_eval
+total_cost    = kr_cost + us_cost
 total_pnl     = total_eval - total_cost
 total_pnl_pct = (total_pnl / total_cost * 100) if total_cost else 0
-cash   = portfolio.get("cash_krw", 0)
-target = portfolio.get("target_return_pct", 15.0)
+total_capital = kr_total + us_total
+target        = portfolio.get("target_return_pct", 15.0)
+
+
+def _sign(v: float) -> str:
+    return "+" if v >= 0 else ""
 
 
 # ════════════════════════════════════════════════════════════
@@ -424,19 +447,25 @@ if st.session_state.page == "dashboard":
 
     # ── 상단 요약 바 ─────────────────────────────────────────
     c1, c2, c3, c4, c_brief, c_set = st.columns([2, 2, 2, 2, 1.2, 1.2])
+
     with c1:
-        st.metric("총 평가금액",
-                  f"₩{total_eval:,.0f}" if total_eval else "조회 필요")
+        val = f"₩{kr_total:,.0f}" if kr_priced else "조회 필요"
+        delta = f"{_sign(kr_pnl_pct)}{kr_pnl_pct:.2f}%" if (kr_priced and kr_h) else None
+        st.metric("🇰🇷 국장 총자본", val, delta,
+                  help=f"보유평가 + 여유현금 ₩{kr_cash:,.0f}")
     with c2:
-        sign = "+" if total_pnl >= 0 else ""
-        st.metric("총 수익/손실",
-                  f"{sign}₩{total_pnl:,.0f}" if total_eval else "—",
-                  f"{sign}{total_pnl_pct:.2f}%" if total_eval else None)
+        val = f"₩{us_total:,.0f}" if us_priced else "조회 필요"
+        delta = f"{_sign(us_pnl_pct)}{us_pnl_pct:.2f}%" if (us_priced and us_h) else None
+        st.metric("🇺🇸 미장 총자본", val, delta,
+                  help=f"보유평가 + 여유현금 ${cash_usd:,.2f} (환율 ₩{fx_rate:,.0f})")
     with c3:
-        st.metric("여유 현금", f"₩{cash:,.0f}")
+        both_priced = kr_priced and us_priced
+        val = f"₩{total_capital:,.0f}" if both_priced else "조회 필요"
+        delta = f"{_sign(total_pnl_pct)}{total_pnl_pct:.2f}%" if (both_priced and total_eval) else None
+        st.metric("합산 총자본", val, delta)
     with c4:
         st.metric("목표 수익률", f"{target:.1f}%",
-                  f"현재 {total_pnl_pct:.1f}%" if total_eval else "시세 조회 후 표시")
+                  f"현재 {_sign(total_pnl_pct)}{total_pnl_pct:.1f}%" if total_eval else "시세 조회 후 표시")
     with c_brief:
         st.write("")
         if st.button("↻ 브리핑", use_container_width=True, type="primary",
@@ -700,16 +729,17 @@ elif st.session_state.page == "settings":
     st.header("⚙ 포트폴리오 설정")
 
     st.subheader("자본금 정보")
+    st.caption("총자본은 보유종목 평가액 + 여유현금으로 자동 계산됩니다.")
     col_a, col_b, col_c = st.columns(3)
     with col_a:
-        new_capital = st.number_input(
-            "총 자본금 (원)", value=int(portfolio.get("capital_krw", 0)),
+        new_cash_krw = st.number_input(
+            "🇰🇷 국장 여유현금 (원)", value=int(portfolio.get("cash_krw", 0)),
             step=100000, min_value=0, format="%d",
         )
     with col_b:
-        new_cash = st.number_input(
-            "여유 현금 (원)", value=int(portfolio.get("cash_krw", 0)),
-            step=100000, min_value=0, format="%d",
+        new_cash_usd = st.number_input(
+            "🇺🇸 미장 여유현금 (USD)", value=float(portfolio.get("cash_usd", 0.0)),
+            step=100.0, min_value=0.0, format="%.2f",
         )
     with col_c:
         new_target = st.number_input(
@@ -779,8 +809,8 @@ elif st.session_state.page == "settings":
 
         save_portfolio({
             **portfolio,
-            "capital_krw":       int(new_capital),
-            "cash_krw":          int(new_cash),
+            "cash_krw":          int(new_cash_krw),
+            "cash_usd":          float(new_cash_usd),
             "target_return_pct": float(new_target),
             "holdings":          new_holdings,
         })

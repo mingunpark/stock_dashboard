@@ -1,6 +1,7 @@
 {
-  "capital_krw": 10000000,
   "target_return_pct": 15.0,
+  "cash_krw": 5000000,
+  "cash_usd": 0.0,
   "holdings": [
     {
       "ticker": "005930",
@@ -34,6 +35,5 @@
       "quantity": 20,
       "avg_price_usd": 175.00
     }
-  ],
-  "cash_krw": 5000000
+  ]
 }
