@@ -1003,7 +1003,7 @@ elif st.session_state.page == "search":
             key="search_ticker_input",
         ).strip().upper()
     with col_market:
-        search_market = st.radio("시장", ["US", "KR"], horizontal=True,
+        search_market = st.radio("시장", ["KR", "US"], horizontal=True,
                                  key="search_market_input")
     with col_run:
         st.write("")
@@ -1026,12 +1026,14 @@ elif st.session_state.page == "search":
                 json.dumps(sp,    ensure_ascii=False, sort_keys=True),
                 json.dumps(sn,    ensure_ascii=False, sort_keys=True),
             )
-            st.session_state.search_price_cache[search_ticker]  = sp
-            st.session_state.search_result_cache[search_ticker] = sr
+            _cache_key = f"{search_ticker}_{search_market}"
+            st.session_state.search_price_cache[_cache_key]  = sp
+            st.session_state.search_result_cache[_cache_key] = sr
 
-    if search_ticker and search_ticker in st.session_state.search_price_cache:
-        sp = st.session_state.search_price_cache[search_ticker]
-        sr = st.session_state.search_result_cache.get(search_ticker, {})
+    _cache_key = f"{search_ticker}_{search_market}"
+    if search_ticker and _cache_key in st.session_state.search_price_cache:
+        sp = st.session_state.search_price_cache[_cache_key]
+        sr = st.session_state.search_result_cache.get(_cache_key, {})
         st.subheader(search_ticker)
         _render_analysis(sp, sr, "search_")
     elif do_search and not search_ticker:
