@@ -223,28 +223,38 @@ PORTFOLIO_PATH     = os.path.join(os.path.dirname(__file__), "portfolio.json")
 ANALYSIS_CACHE_PATH = os.path.join(os.path.dirname(__file__), "analysis_cache.json")
 
 
-def _holdings_hash(holdings: list) -> str:
+def _holdings_hash(holdings: list, watchlist: list | None = None) -> str:
     key = json.dumps(sorted(holdings, key=lambda h: h["ticker"]), ensure_ascii=False, sort_keys=True)
+    if watchlist:
+        wl_key = json.dumps(sorted(watchlist, key=lambda w: w["ticker"]), ensure_ascii=False, sort_keys=True)
+        key += "|" + wl_key
     return hashlib.md5(key.encode()).hexdigest()[:12]
 
 
-def load_analysis_cache(holdings: list) -> dict:
-    """파일 캐시에서 분석 결과 로드 — holdings 내용이 변경되면 자동 무효화."""
+def load_analysis_cache(holdings: list, watchlist: list | None = None) -> dict:
+    """파일 캐시에서 분석 결과 로드 — holdings/watchlist 변경 또는 24시간 경과 시 무효화."""
     try:
         with open(ANALYSIS_CACHE_PATH, encoding="utf-8") as f:
             data = json.load(f)
-        if data.get("portfolio_hash") == _holdings_hash(holdings):
-            return data.get("results", {})
+        if data.get("portfolio_hash") != _holdings_hash(holdings, watchlist):
+            return {}
+        try:
+            age = (datetime.now() - datetime.fromisoformat(data.get("analyzed_at", ""))).total_seconds()
+            if age > 86400:
+                return {}
+        except (ValueError, TypeError):
+            return {}
+        return data.get("results", {})
     except (FileNotFoundError, json.JSONDecodeError, KeyError):
         pass
     return {}
 
 
-def save_analysis_cache(holdings: list, results: dict) -> None:
+def save_analysis_cache(holdings: list, results: dict, watchlist: list | None = None) -> None:
     try:
         with open(ANALYSIS_CACHE_PATH, "w", encoding="utf-8") as f:
             json.dump({
-                "portfolio_hash": _holdings_hash(holdings),
+                "portfolio_hash": _holdings_hash(holdings, watchlist),
                 "analyzed_at":    datetime.now().isoformat(timespec="seconds"),
                 "results":        results,
             }, f, ensure_ascii=False, indent=2)
@@ -255,7 +265,10 @@ def save_analysis_cache(holdings: list, results: dict) -> None:
 def load_portfolio() -> dict:
     try:
         with open(PORTFOLIO_PATH) as f:
-            return json.load(f)
+            data = json.load(f)
+        for h in data.get("holdings", []):
+            h.setdefault("sector", "")
+        return data
     except FileNotFoundError:
         st.error("portfolio.json 파일이 없습니다.")
         st.stop()
@@ -265,8 +278,11 @@ def load_portfolio() -> dict:
 
 
 def save_portfolio(data: dict) -> None:
-    with open(PORTFOLIO_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    try:
+        with open(PORTFOLIO_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except IOError as e:
+        st.error(f"포트폴리오 저장 실패: {e}")
 
 
 def load_watchlist() -> list:
@@ -276,6 +292,15 @@ def load_watchlist() -> list:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return []
+
+
+def save_watchlist(data: list) -> None:
+    path = os.path.join(os.path.dirname(__file__), "watchlist.json")
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except IOError as e:
+        st.error(f"워치리스트 저장 실패: {e}")
 
 
 # ── 전체 브리핑 ──────────────────────────────────────────────
@@ -404,9 +429,17 @@ if "briefing_results" not in st.session_state:
     if os.path.exists(PORTFOLIO_PATH):
         with open(PORTFOLIO_PATH, encoding="utf-8") as _pf:
             _init_holdings = json.load(_pf).get("holdings", [])
+        for _h in _init_holdings:
+            _h.setdefault("sector", "")
     else:
         _init_holdings = []
-    st.session_state.briefing_results = load_analysis_cache(_init_holdings)
+    _wl_path = os.path.join(os.path.dirname(__file__), "watchlist.json")
+    try:
+        with open(_wl_path, encoding="utf-8") as _wf:
+            _init_watchlist = json.load(_wf)
+    except Exception:
+        _init_watchlist = []
+    st.session_state.briefing_results = load_analysis_cache(_init_holdings, _init_watchlist)
 if "price_cache"       not in st.session_state: st.session_state.price_cache = {}
 if "do_briefing"       not in st.session_state: st.session_state.do_briefing = False
 if "search_price_cache"  not in st.session_state: st.session_state.search_price_cache = {}
@@ -415,6 +448,7 @@ if "search_news_cache"   not in st.session_state: st.session_state.search_news_c
 if "search_fin_cache"    not in st.session_state: st.session_state.search_fin_cache = {}
 if "detail_news_cache"   not in st.session_state: st.session_state.detail_news_cache = {}
 if "detail_fin_cache"    not in st.session_state: st.session_state.detail_fin_cache = {}
+if "dca_wl_price_cache"  not in st.session_state: st.session_state.dca_wl_price_cache = {}
 
 
 # ── 공통 데이터 ──────────────────────────────────────────────
@@ -769,12 +803,12 @@ if st.session_state.page == "dashboard":
                 text=f"AI 분석: {name} ({i+1}/{n}) — 속도 제한 시 자동 재시도"
             )
         st.session_state.briefing_results = run_full_briefing(holdings, _progress)
-        save_analysis_cache(holdings, st.session_state.briefing_results)
+        save_analysis_cache(holdings, st.session_state.briefing_results, watchlist)
         bar.empty()
         st.rerun()
 
     # ── 상단 요약 바 ─────────────────────────────────────────
-    c1, c2, c3, c4, c5, c_brief, c_srch, c_set = st.columns([1.8, 1.8, 1.8, 1.8, 1.8, 1, 1, 1])
+    c1, c2, c3, c4, c5, c_brief, c_srch, c_dca, c_set = st.columns([1.8, 1.8, 1.8, 1.8, 1.8, 1, 1, 1, 1])
 
     with c1:
         val = f"₩{kr_total:,.0f}" if kr_priced else "조회 필요"
@@ -812,6 +846,12 @@ if st.session_state.page == "dashboard":
         if st.button("🔍 검색", use_container_width=True,
                      help="비보유 종목 검색 & 분석"):
             st.session_state.page = "search"
+            st.rerun()
+    with c_dca:
+        st.write("")
+        if st.button("📊 DCA", use_container_width=True,
+                     help="DCA 플래너 — 섹터 분산 분할매수"):
+            st.session_state.page = "dca"
             st.rerun()
     with c_set:
         st.write("")
@@ -1126,13 +1166,224 @@ elif st.session_state.page == "search":
 
 
 # ════════════════════════════════════════════════════════════
-# 화면 3: DCA 플래너 (뼈대)
+# 화면 3: DCA 플래너
 # ════════════════════════════════════════════════════════════
 elif st.session_state.page == "dca":
     if st.button("← 대시보드로"):
         st.session_state.page = "dashboard"; st.rerun()
-    st.header("DCA 플래너")
-    st.info("다음 단계에서 구현됩니다.")
+
+    st.header("📊 DCA 플래너")
+    st.caption("섹터 분산 기반 분할매수 추천 — 여유현금을 낮은 비중 섹터에 분산 투자합니다.")
+
+    cash_krw = portfolio.get("cash_krw", 0)
+    cash_usd = portfolio.get("cash_usd", 0.0)
+    has_krw_cash = cash_krw > 0
+    has_usd_cash = cash_usd > 0.0
+
+    # ── 섹터 비중 계산 ─────────────────────────────────────
+    sector_eval: dict[str, float] = {}
+    total_stock_eval = 0.0
+    for _h in holdings:
+        _p = st.session_state.price_cache.get(_h["ticker"], {})
+        _price = _p.get("price", 0)
+        _qty   = _h["quantity"]
+        _eval_krw = _price * _qty if _h["market"] == "KR" else _price * fx_rate * _qty
+        _sec = _h.get("sector") or "미분류"
+        sector_eval[_sec] = sector_eval.get(_sec, 0.0) + _eval_krw
+        total_stock_eval += _eval_krw
+
+    sector_weights: dict[str, float] = {}
+    if total_stock_eval > 0:
+        sector_weights = {s: v / total_stock_eval * 100 for s, v in sector_eval.items()}
+
+    # ── 섹터 비중 표시 ─────────────────────────────────────
+    st.subheader("섹터 비중")
+    if not total_stock_eval:
+        st.info("시세 데이터가 없습니다. 대시보드에서 '↻ 브리핑'을 실행하면 섹터 비중이 표시됩니다.")
+    else:
+        sorted_secs = sorted(sector_weights.items(), key=lambda x: x[1])
+        _cols_n = min(len(sorted_secs), 4)
+        sec_cols = st.columns(_cols_n)
+        for _i, (_s, _w) in enumerate(sorted_secs):
+            _col = sec_cols[_i % _cols_n]
+            _delta = "▲ 비중 낮음" if _w < 5 else None
+            _delta_color = "inverse" if _w < 5 else "normal"
+            _col.metric(_s, f"{_w:.1f}%", delta=_delta, delta_color=_delta_color)
+
+    st.divider()
+
+    # ── DCA 설정 슬라이더 ──────────────────────────────────
+    st.subheader("DCA 설정")
+    if not has_krw_cash and not has_usd_cash:
+        st.warning("⚠ 포트폴리오 설정에서 여유현금을 입력해주세요. (⚙ 설정 → 여유현금 항목)")
+
+    _slider_disabled = (not has_krw_cash and not has_usd_cash)
+    _col_r, _col_rt = st.columns(2)
+    with _col_r:
+        dca_rounds = st.slider(
+            "분할 회차", min_value=2, max_value=5, value=3,
+            key="dca_rounds", disabled=_slider_disabled,
+            help="동일 금액을 몇 회에 나눠 매수할지 설정합니다.",
+        )
+    with _col_rt:
+        dca_ratio = st.number_input(
+            "투자 비율 (%)", min_value=10.0, max_value=100.0, value=100.0, step=10.0,
+            key="dca_ratio", disabled=_slider_disabled,
+            help="여유현금의 몇 %를 이번 DCA에 사용할지 설정합니다.",
+        )
+
+    if has_krw_cash:
+        _total_krw = cash_krw * dca_ratio / 100
+        _per_krw   = _total_krw / dca_rounds
+        st.caption(
+            f"🇰🇷 국장 — 총 투자액: ₩{_total_krw:,.0f} "
+            f"({dca_rounds}회 × ₩{_per_krw:,.0f})"
+        )
+    if has_usd_cash:
+        _total_usd = cash_usd * dca_ratio / 100
+        _per_usd   = _total_usd / dca_rounds
+        st.caption(
+            f"🇺🇸 미장 — 총 투자액: ${_total_usd:,.2f} "
+            f"({dca_rounds}회 × ${_per_usd:,.2f})"
+        )
+
+    st.divider()
+
+    # ── 워치리스트 분석 ────────────────────────────────────
+    st.subheader("워치리스트 분석")
+
+    if not watchlist:
+        st.caption("watchlist.json이 비어 있습니다.")
+    else:
+        _col_analyze, _col_refresh = st.columns([2, 1])
+        with _col_analyze:
+            _do_wl_analyze = st.button("🔍 워치리스트 AI 분석 실행", type="primary",
+                                       help="워치리스트 전 종목 시세 + AI 분석 (캐시 없을 때만 Gemini 호출)")
+        with _col_refresh:
+            _do_sector_refresh = st.button("↻ 섹터 새로고침 (US)",
+                                           help="US 종목의 섹터 정보를 yfinance에서 가져와 watchlist.json에 저장")
+
+        # 섹터 새로고침 처리
+        if _do_sector_refresh:
+            _updated_count = 0
+            with st.spinner("US 종목 섹터 정보 업데이트 중..."):
+                _wl_updated = [dict(w) for w in watchlist]
+                for _i, _wl_item in enumerate(_wl_updated):
+                    if _wl_item.get("market") == "US":
+                        _fin = _fetch_financials(_wl_item["ticker"], "US")
+                        _fetched_sec = (_fin.get("sector") or "").strip()
+                        if _fetched_sec:
+                            _wl_updated[_i]["sector"] = _fetched_sec
+                            _updated_count += 1
+            save_watchlist(_wl_updated)
+            st.success(f"섹터 업데이트 완료 ({_updated_count}개 US 종목 갱신)")
+            st.rerun()
+
+        # 워치리스트 AI 분석 실행
+        if _do_wl_analyze:
+            _wl_total = len(watchlist)
+            _wl_bar = st.progress(0, text="워치리스트 분석 중...")
+            for _i, _wl_item in enumerate(watchlist):
+                _wl_bar.progress(
+                    (_i + 1) / _wl_total,
+                    text=f"분석 중: {_wl_item.get('name', _wl_item['ticker'])} ({_i+1}/{_wl_total})",
+                )
+                _wp  = fetch_price(_wl_item["ticker"], _wl_item["market"])
+                _wn  = fetch_news(_wl_item["ticker"], _wl_item["market"],
+                                  _wl_item.get("name", _wl_item["ticker"]))
+                _wf  = fetch_financials(_wl_item["ticker"], _wl_item["market"])
+                _wdummy = {
+                    "ticker":        _wl_item["ticker"],
+                    "market":        _wl_item["market"],
+                    "name":          _wl_item.get("name", _wl_item["ticker"]),
+                    "quantity":      0,
+                    "avg_price_krw": 0,
+                    "avg_price_usd": 0.0,
+                    "sector":        _wl_item.get("sector", ""),
+                }
+                _wr = analyze_cached(
+                    json.dumps(_wdummy, ensure_ascii=False, sort_keys=True),
+                    json.dumps(_wp,     ensure_ascii=False, sort_keys=True),
+                    json.dumps(_wn,     ensure_ascii=False, sort_keys=True),
+                    json.dumps(_wf,     ensure_ascii=False, sort_keys=True),
+                )
+                st.session_state.briefing_results[_wl_item["ticker"]] = _wr
+                st.session_state.dca_wl_price_cache[_wl_item["ticker"]] = _wp
+            save_analysis_cache(holdings, st.session_state.briefing_results, watchlist)
+            _wl_bar.empty()
+            st.rerun()
+
+        # ── 추천 종목 ──────────────────────────────────────
+        st.subheader("추천 종목")
+
+        low_sectors = {s for s, w in sector_weights.items() if w < 5} if sector_weights else set()
+
+        def _wl_sort_key(item: dict) -> tuple:
+            _s = item.get("sector") or "미분류"
+            _in_low = 0 if _s in low_sectors else 1
+            _rsi = st.session_state.dca_wl_price_cache.get(item["ticker"], {}).get("rsi") or 999
+            return (_in_low, _rsi)
+
+        _sorted_wl = sorted(watchlist, key=_wl_sort_key)
+
+        for _wl_item in _sorted_wl:
+            _ws    = _wl_item.get("sector") or "미분류"
+            _ww    = sector_weights.get(_ws)
+            _ww_str = f"{_ww:.1f}%" if _ww is not None else "—"
+            _is_low = (_ww is not None and _ww < 5)
+            _low_tag = (
+                ' <span style="background:rgba(239,68,68,0.12);color:#f87171;'
+                'border:1px solid rgba(239,68,68,0.3);border-radius:4px;'
+                'padding:1px 6px;font-size:11px">비중 낮음</span>'
+            ) if _is_low else ""
+
+            _wresult  = st.session_state.briefing_results.get(_wl_item["ticker"], {})
+            _wprice_d = st.session_state.dca_wl_price_cache.get(_wl_item["ticker"], {})
+            _wmkt = _wl_item["market"]
+            _has_cash = (has_krw_cash if _wmkt == "KR" else has_usd_cash)
+
+            with st.expander(
+                f"**{_wl_item.get('name', _wl_item['ticker'])}** ({_wl_item['ticker']}) "
+                f"— {_ws} {_ww_str}",
+                expanded=_is_low,
+            ):
+                _ci, _cg = st.columns([3, 1])
+                with _ci:
+                    st.markdown(
+                        f"섹터: **{_esc(_ws)}** | 포트폴리오 비중: **{_ww_str}**{_low_tag}",
+                        unsafe_allow_html=True,
+                    )
+                    if _wprice_d.get("price"):
+                        _wrsi = _wprice_d.get("rsi", "—")
+                        st.caption(
+                            f"현재가: {_wprice_d.get('price_display','—')} | RSI: {_wrsi}"
+                        )
+                    st.markdown(opinion_badge(_wresult.get("opinion")), unsafe_allow_html=True)
+                    _wreasons = _wresult.get("reasons", [])
+                    if _wreasons:
+                        st.caption(_wreasons[0])
+                with _cg:
+                    if _has_cash:
+                        if _wmkt == "KR":
+                            _amt = cash_krw * dca_ratio / 100 / dca_rounds
+                            st.markdown(f"**1회 ₩{_amt:,.0f}**")
+                            for _rnd in range(1, dca_rounds + 1):
+                                st.caption(f"{_rnd}차: ₩{_amt:,.0f}")
+                        else:
+                            _amt = cash_usd * dca_ratio / 100 / dca_rounds
+                            st.markdown(f"**1회 ${_amt:,.2f}**")
+                            for _rnd in range(1, dca_rounds + 1):
+                                st.caption(f"{_rnd}차: ${_amt:,.2f}")
+                    else:
+                        st.caption("여유현금 없음")
+
+                    if st.button("상세 분석 →",
+                                 key=f"dca_go_{_wl_item['ticker']}",
+                                 use_container_width=True):
+                        st.session_state.search_ticker_input = _wl_item["ticker"]
+                        st.session_state.search_market_input = _wl_item["market"]
+                        st.session_state.page = "search"
+                        st.rerun()
 
 
 # ════════════════════════════════════════════════════════════
@@ -1172,6 +1423,7 @@ elif st.session_state.page == "settings":
             "ticker":        h["ticker"],
             "name":          h.get("name", ""),
             "market":        h["market"],
+            "sector":        h.get("sector", ""),
             "quantity":      h["quantity"],
             "avg_price_krw": h.get("avg_price_krw", 0),
             "avg_price_usd": h.get("avg_price_usd", 0.0),
@@ -1187,6 +1439,7 @@ elif st.session_state.page == "settings":
             "name":          st.column_config.TextColumn("종목명", width="medium"),
             "market":        st.column_config.SelectboxColumn(
                                  "시장", options=["KR", "US"], width="small"),
+            "sector":        st.column_config.TextColumn("섹터", width="medium"),
             "quantity":      st.column_config.NumberColumn(
                                  "수량(주)", min_value=0, step=1, format="%d"),
             "avg_price_krw": st.column_config.NumberColumn(
@@ -1221,6 +1474,7 @@ elif st.session_state.page == "settings":
                 h["avg_price_usd"] = (
                     float(row["avg_price_usd"]) if pd.notna(row.get("avg_price_usd")) else 0.0
                 )
+            h["sector"] = str(row.get("sector") or "")
             new_holdings.append(h)
 
         old_hash = _holdings_hash(portfolio.get("holdings", []))

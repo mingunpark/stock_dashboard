@@ -337,45 +337,57 @@ def fetch_fx_rate() -> float:
 # ── 재무 정보 ─────────────────────────────────────────────────
 
 def fetch_financials(ticker: str, market: str) -> dict:
-    """yfinance로 종목 재무 지표 조회. KR은 .KS suffix."""
-    yt = ticker + ".KS" if market == "KR" else ticker
-    try:
-        info = yf.Ticker(yt).info
-        if not info or info.get("trailingPE") is None and info.get("marketCap") is None:
-            return {"error": "재무 데이터 없음"}
+    """yfinance로 종목 재무 지표 조회. KR은 .KS → .KQ fallback."""
 
-        def _v(key):
-            v = info.get(key)
-            if v is None:
-                return None
-            try:
-                r = float(v)
-            except (ValueError, TypeError):
-                return None
-            return None if (math.isnan(r) or math.isinf(r)) else round(r, 4)
+    if market == "KR":
+        suffixes = [".KS", ".KQ"]
+        candidates = [ticker + s for s in suffixes]
+    else:
+        candidates = [ticker]
 
-        mc = info.get("marketCap")
+    info = None
+    for yt in candidates:
         try:
-            mc = int(mc) if mc is not None and not math.isnan(float(mc)) and not math.isinf(float(mc)) else None
-        except (ValueError, TypeError):
-            mc = None
+            _info = yf.Ticker(yt).info
+            if _info and (_info.get("trailingPE") is not None or _info.get("marketCap") is not None):
+                info = _info
+                break
+        except Exception:
+            continue
 
-        return {
-            "market_cap":       mc,
-            "per":              _v("trailingPE"),
-            "forward_per":      _v("forwardPE"),
-            "pbr":              _v("priceToBook"),
-            "roe":              _v("returnOnEquity"),
-            "eps":              _v("trailingEps"),
-            "operating_margin": _v("operatingMargins"),
-            "profit_margin":    _v("profitMargins"),
-            "debt_to_equity":   _v("debtToEquity"),
-            "dividend_yield":   _v("dividendYield"),
-            "sector":           info.get("sector", ""),
-            "industry":         info.get("industry", ""),
-        }
-    except Exception as e:
-        return {"error": str(e)[:80]}
+    if info is None:
+        return {"error": "재무 데이터 없음"}
+
+    def _v(key):
+        v = info.get(key)
+        if v is None:
+            return None
+        try:
+            r = float(v)
+        except (ValueError, TypeError):
+            return None
+        return None if (math.isnan(r) or math.isinf(r)) else round(r, 4)
+
+    mc = info.get("marketCap")
+    try:
+        mc = int(mc) if mc is not None and not math.isnan(float(mc)) and not math.isinf(float(mc)) else None
+    except (ValueError, TypeError):
+        mc = None
+
+    return {
+        "market_cap":       mc,
+        "per":              _v("trailingPE"),
+        "forward_per":      _v("forwardPE"),
+        "pbr":              _v("priceToBook"),
+        "roe":              _v("returnOnEquity"),
+        "eps":              _v("trailingEps"),
+        "operating_margin": _v("operatingMargins"),
+        "profit_margin":    _v("profitMargins"),
+        "debt_to_equity":   _v("debtToEquity"),
+        "dividend_yield":   _v("dividendYield"),
+        "sector":           info.get("sector", ""),
+        "industry":         info.get("industry", ""),
+    }
 
 
 def fetch_market_indicators() -> dict:
