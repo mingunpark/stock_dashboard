@@ -15,6 +15,7 @@ from analysis.claude_client import (
     curate_macro_news as _curate_macro_news,
 )
 from data.fetcher import (
+    fetch_financials as _fetch_financials,
     fetch_fx_rate as _fetch_fx_rate,
     fetch_macro_news_raw as _fetch_macro_news_raw,
     fetch_market_indicators as _fetch_market_indicators,
@@ -201,12 +202,18 @@ def fetch_macro_curated() -> list[dict]:
     return _curate_macro_news(raw) if raw else []
 
 
+@st.cache_data(ttl=3600)
+def fetch_financials(ticker: str, market: str) -> dict:
+    return _fetch_financials(ticker, market)
+
+
 @st.cache_data(ttl=14400)
-def analyze_cached(holding_json: str, price_json: str, news_json: str) -> dict:
+def analyze_cached(holding_json: str, price_json: str, news_json: str, financials_json: str = "{}") -> dict:
     return _analyze_stock(
         json.loads(holding_json),
         json.loads(price_json),
         json.loads(news_json),
+        json.loads(financials_json) or None,
     )
 
 
@@ -278,12 +285,14 @@ def run_full_briefing(holdings: list, progress_cb=None) -> dict:
     for i, h in enumerate(holdings):
         if progress_cb:
             progress_cb(i, len(holdings), h.get("name", h["ticker"]))
-        price = fetch_price(h["ticker"], h["market"])
-        news  = fetch_news(h["ticker"], h["market"], h.get("name", h["ticker"]))
+        price      = fetch_price(h["ticker"], h["market"])
+        news       = fetch_news(h["ticker"], h["market"], h.get("name", h["ticker"]))
+        financials = fetch_financials(h["ticker"], h["market"])
         result = analyze_cached(
-            json.dumps(h,     ensure_ascii=False, sort_keys=True),
-            json.dumps(price, ensure_ascii=False, sort_keys=True),
-            json.dumps(news,  ensure_ascii=False, sort_keys=True),
+            json.dumps(h,          ensure_ascii=False, sort_keys=True),
+            json.dumps(price,      ensure_ascii=False, sort_keys=True),
+            json.dumps(news,       ensure_ascii=False, sort_keys=True),
+            json.dumps(financials, ensure_ascii=False, sort_keys=True),
         )
         results[h["ticker"]] = result
     return results
@@ -402,6 +411,10 @@ if "price_cache"       not in st.session_state: st.session_state.price_cache = {
 if "do_briefing"       not in st.session_state: st.session_state.do_briefing = False
 if "search_price_cache"  not in st.session_state: st.session_state.search_price_cache = {}
 if "search_result_cache" not in st.session_state: st.session_state.search_result_cache = {}
+if "search_news_cache"   not in st.session_state: st.session_state.search_news_cache = {}
+if "search_fin_cache"    not in st.session_state: st.session_state.search_fin_cache = {}
+if "detail_news_cache"   not in st.session_state: st.session_state.detail_news_cache = {}
+if "detail_fin_cache"    not in st.session_state: st.session_state.detail_fin_cache = {}
 
 
 # ── 공통 데이터 ──────────────────────────────────────────────
@@ -456,7 +469,8 @@ def _sign(v: float) -> str:
     return "+" if v >= 0 else ""
 
 
-def _render_analysis(price_data: dict, result: dict, key_prefix: str = "") -> None:
+def _render_analysis(price_data: dict, result: dict, key_prefix: str = "",
+                     news: list | None = None, financials: dict | None = None) -> None:
     """지표 요약 바 + 캔들차트 + 신호 테이블 + AI 분석 결과 렌더링."""
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
@@ -668,6 +682,63 @@ def _render_analysis(price_data: dict, result: dict, key_prefix: str = "") -> No
         if result.get("counterpoint"):
             st.warning(f"반론: {result['counterpoint']}")
         st.caption("※ 투자 결정은 본인 책임입니다.")
+
+        # ── 재무 정보 ──────────────────────────────────────────
+        fin = financials or {}
+        if fin and not fin.get("error"):
+            st.divider()
+            st.markdown("**📊 재무 정보**")
+            def _fv(v, fmt=",.2f", suffix=""):
+                return f"{v:{fmt}}{suffix}" if v is not None else "—"
+            def _pct_v(v):
+                return f"{v*100:.1f}%" if v is not None else "—"
+            def _cap_v(v):
+                if v is None: return "—"
+                if v >= 1e12: return f"{v/1e12:.2f}T"
+                if v >= 1e9:  return f"{v/1e9:.1f}B"
+                return f"{v/1e6:.0f}M"
+
+            r1c1, r1c2, r1c3, r1c4 = st.columns(4)
+            r1c1.metric("시가총액",   _cap_v(fin.get("market_cap")))
+            r1c2.metric("PER(TTM)",  _fv(fin.get("per"), suffix="x"))
+            r1c3.metric("PBR",       _fv(fin.get("pbr"), suffix="x"))
+            r1c4.metric("ROE",       _pct_v(fin.get("roe")))
+
+            r2c1, r2c2, r2c3, r2c4 = st.columns(4)
+            r2c1.metric("영업이익률", _pct_v(fin.get("operating_margin")))
+            r2c2.metric("순이익률",   _pct_v(fin.get("profit_margin")))
+            r2c3.metric("부채비율",   _fv(fin.get("debt_to_equity")))
+            r2c4.metric("배당수익률", _pct_v(fin.get("dividend_yield")))
+
+            if fin.get("sector"):
+                st.caption(f"섹터: {fin.get('sector')} / {fin.get('industry','')}")
+
+        # ── 관련 뉴스 ──────────────────────────────────────────
+        news_items = [n for n in (news or []) if n.get("title")]
+        if news_items:
+            st.divider()
+            st.markdown("**📰 관련 뉴스**")
+            for n in news_items:
+                src  = n.get("source", "")
+                pub  = n.get("published", "")
+                link = n.get("link", "")
+                if not link.startswith(("http://", "https://")):
+                    link = ""
+                meta = " · ".join(filter(None, [src, pub[:16] if pub else ""]))
+                title_esc = _esc(n["title"])
+                if link:
+                    st.markdown(
+                        f'<div style="margin-bottom:8px">'
+                        f'<a href="{link}" target="_blank" style="color:var(--text-color)">{title_esc}</a>'
+                        f'<br><small style="color:#999">{_esc(meta)}</small></div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(
+                        f'<div style="margin-bottom:8px">{title_esc}'
+                        f'<br><small style="color:#999">{_esc(meta)}</small></div>',
+                        unsafe_allow_html=True,
+                    )
 
     elif result.get("error"):
         st.error(result["error"])
@@ -969,21 +1040,27 @@ elif st.session_state.page == "detail":
         with st.spinner("분석 중..."):
             price_data = fetch_price(ticker, holding["market"])
             news       = fetch_news(ticker, holding["market"], holding.get("name", ticker))
+            financials = fetch_financials(ticker, holding["market"])
             result     = analyze_cached(
                 json.dumps(holding,    ensure_ascii=False, sort_keys=True),
                 json.dumps(price_data, ensure_ascii=False, sort_keys=True),
                 json.dumps(news,       ensure_ascii=False, sort_keys=True),
+                json.dumps(financials, ensure_ascii=False, sort_keys=True),
             )
-            st.session_state.price_cache[ticker]      = price_data
-            st.session_state.briefing_results[ticker] = result
+            st.session_state.price_cache[ticker]         = price_data
+            st.session_state.briefing_results[ticker]    = result
+            st.session_state.detail_news_cache[ticker]   = news
+            st.session_state.detail_fin_cache[ticker]    = financials
 
     price_data = st.session_state.price_cache.get(ticker, {})
     result     = st.session_state.briefing_results.get(ticker, {})
+    detail_news = st.session_state.detail_news_cache.get(ticker, [])
+    detail_fin  = st.session_state.detail_fin_cache.get(ticker, {})
 
     if not price_data.get("price") and not result.get("opinion") and not result.get("error"):
         st.info("위 버튼을 눌러 분석을 실행하세요.")
     else:
-        _render_analysis(price_data, result, "detail_")
+        _render_analysis(price_data, result, "detail_", news=detail_news, financials=detail_fin)
 
 
 # ════════════════════════════════════════════════════════════
@@ -1013,6 +1090,7 @@ elif st.session_state.page == "search":
         with st.spinner(f"{search_ticker} 분석 중..."):
             sp = fetch_price(search_ticker, search_market)
             sn = fetch_news(search_ticker, search_market, search_ticker)
+            sf = fetch_financials(search_ticker, search_market)
             dummy = {
                 "ticker":        search_ticker,
                 "market":        search_market,
@@ -1025,17 +1103,22 @@ elif st.session_state.page == "search":
                 json.dumps(dummy, ensure_ascii=False, sort_keys=True),
                 json.dumps(sp,    ensure_ascii=False, sort_keys=True),
                 json.dumps(sn,    ensure_ascii=False, sort_keys=True),
+                json.dumps(sf,    ensure_ascii=False, sort_keys=True),
             )
             _cache_key = f"{search_ticker}_{search_market}"
             st.session_state.search_price_cache[_cache_key]  = sp
             st.session_state.search_result_cache[_cache_key] = sr
+            st.session_state.search_news_cache[_cache_key]   = sn
+            st.session_state.search_fin_cache[_cache_key]    = sf
 
     _cache_key = f"{search_ticker}_{search_market}"
     if search_ticker and _cache_key in st.session_state.search_price_cache:
         sp = st.session_state.search_price_cache[_cache_key]
         sr = st.session_state.search_result_cache.get(_cache_key, {})
+        sn = st.session_state.search_news_cache.get(_cache_key, [])
+        sf = st.session_state.search_fin_cache.get(_cache_key, {})
         st.subheader(search_ticker)
-        _render_analysis(sp, sr, "search_")
+        _render_analysis(sp, sr, "search_", news=sn, financials=sf)
     elif do_search and not search_ticker:
         st.warning("종목코드를 입력해주세요.")
     elif not do_search:

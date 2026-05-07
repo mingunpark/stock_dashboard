@@ -15,7 +15,7 @@ _MODEL = "gemini-2.5-flash"
 
 # ── 프롬프트 빌드 ─────────────────────────────────────────────
 
-def build_prompt(holding: dict, price_data: dict, news: list[dict]) -> str:
+def build_prompt(holding: dict, price_data: dict, news: list[dict], financials: dict | None = None) -> str:
     ticker = holding["ticker"]
     name   = holding.get("name", ticker)
     market = holding["market"]
@@ -65,8 +65,31 @@ def build_prompt(holding: dict, price_data: dict, news: list[dict]) -> str:
         for n in news if n.get("title")
     ) or "- 수집된 뉴스 없음 (기술지표 기반으로만 분석)"
 
-    return f"""당신은 개인 투자자를 위한 주식 기술적 분석 AI입니다.
-제공된 기술지표, 가격 패턴, 뉴스를 종합하여 객관적이고 구체적인 분석을 제공하세요.
+    fin = financials or {}
+    def _pct(v): return f"{v*100:.1f}%" if v is not None else "N/A"
+    def _fmt_fin(v): return f"{v:,.2f}" if v is not None else "N/A"
+    def _fmt_cap(v):
+        if v is None: return "N/A"
+        if v >= 1e12: return f"{v/1e12:.2f}T"
+        if v >= 1e9:  return f"{v/1e9:.1f}B"
+        return f"{v/1e6:.0f}M"
+
+    fin_section = ""
+    if fin and not fin.get("error"):
+        fin_section = f"""
+재무 지표:
+- 시가총액: {_fmt_cap(fin.get('market_cap'))} | 섹터: {fin.get('sector','N/A')} / {fin.get('industry','N/A')}
+- PER(TTM): {_fmt_fin(fin.get('per'))}x | Forward PER: {_fmt_fin(fin.get('forward_per'))}x | PBR: {_fmt_fin(fin.get('pbr'))}x
+- ROE: {_pct(fin.get('roe'))} | EPS: {_fmt_fin(fin.get('eps'))}
+- 영업이익률: {_pct(fin.get('operating_margin'))} | 순이익률: {_pct(fin.get('profit_margin'))}
+- 부채비율(D/E): {_fmt_fin(fin.get('debt_to_equity'))} | 배당수익률: {_pct(fin.get('dividend_yield'))}
+"""
+
+    has_fin = bool(fin and not fin.get("error"))
+    fin_instruction = "(재무 지표 기반 — PER/PBR/ROE/영업이익률 수치 명시)" if has_fin else "(재무 데이터 없음 — 생략 가능)"
+
+    return f"""당신은 개인 투자자를 위한 주식 종합 분석 AI입니다.
+제공된 기술지표, 재무 지표, 뉴스를 종합하여 객관적이고 구체적인 분석을 제공하세요.
 
 종목 정보:
 - 종목코드: {ticker} ({name}) | 시장: {market}
@@ -81,7 +104,7 @@ def build_prompt(holding: dict, price_data: dict, news: list[dict]) -> str:
 - 52주 범위: {week52_lo} ~ {week52_hi} | 52주 위치: {week52_pos}%
 - 지지선: {support} | 저항선: {resistance}
 - 거래량 비율(5일/20일): {vol_ratio}배 | 거래량 급증: {"있음" if vol_surge else "없음"}
-
+{fin_section}
 추세 및 파동 분석:
 - 중기 추세 방향: {trend_dir} (MA20 기울기 기반)
 - 스윙 고점 시퀀스 (오래된→최근): {_fmt_swings(swing_highs)}
@@ -101,6 +124,7 @@ def build_prompt(holding: dict, price_data: dict, news: list[dict]) -> str:
 근거 2: (캔들/차트 패턴 기반 — 패턴명과 위치 명시)
 근거 3: (다우이론/엘리어트/추세 기반 — 현재 국면 판단)
 근거 4: (뉴스/거래량/매크로 기반)
+근거 5: {fin_instruction}
 엘리어트 파동 판단: (스윙 고점/저점 시퀀스를 보고 현재 몇 파에 위치하는지 추정. 상승 5파 구조인지 조정 ABC인지 명시. 확신 없으면 "판단 어려움" 기재)
 차트 패턴 판단: (최근 20봉 OHLCV에서 감지되는 패턴 명시. 헤드앤숄더/이중천장·바닥/삼각수렴/컵앤핸들/깃발형 등. 없으면 "뚜렷한 패턴 없음" 기재)
 다우 이론 국면: (스윙 고저점 흐름으로 현재 추세 국면 판단. "고점·저점 모두 상승 → 상승추세 확인" 형식으로 기재. 분산/축적 국면이면 명시)
@@ -232,7 +256,7 @@ def curate_macro_news(raw_items: list[dict]) -> list[dict]:
         return []
 
 
-def analyze_stock(holding: dict, price_data: dict, news: list[dict]) -> dict:
+def analyze_stock(holding: dict, price_data: dict, news: list[dict], financials: dict | None = None) -> dict:
     if price_data.get("error"):
         return {
             "opinion": None, "reasons": [], "counterpoint": None,
@@ -244,7 +268,7 @@ def analyze_stock(holding: dict, price_data: dict, news: list[dict]) -> dict:
             "raw": None, "error": "GEMINI_API_KEY 미설정 (.env 확인)",
         }
     try:
-        prompt = build_prompt(holding, price_data, news)
+        prompt = build_prompt(holding, price_data, news, financials)
         raw    = _call_gemini(prompt)
         return parse_response(raw)
     except Exception as e:
