@@ -425,6 +425,7 @@ def _ind_card(key: str, val, chg, meta: dict) -> str:
 # ── 세션 상태 ────────────────────────────────────────────────
 if "page"             not in st.session_state: st.session_state.page = "dashboard"
 if "selected_ticker"  not in st.session_state: st.session_state.selected_ticker = None
+
 if "briefing_results" not in st.session_state:
     if os.path.exists(PORTFOLIO_PATH):
         with open(PORTFOLIO_PATH, encoding="utf-8") as _pf:
@@ -1496,3 +1497,5 @@ elif st.session_state.page == "settings":
             except FileNotFoundError:
                 pass
         st.success("저장 완료! 대시보드로 돌아가면 변경사항이 반영됩니다.")
+
+

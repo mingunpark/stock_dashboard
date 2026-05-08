@@ -1,6 +1,6 @@
 {
   "target_return_pct": 15.0,
-  "cash_krw": 1000000,
+  "cash_krw": 4870000,
   "cash_usd": 0.0,
   "holdings": [
     {
@@ -20,19 +20,11 @@
       "sector": ""
     },
     {
-      "ticker": "032820",
-      "name": "우리기술",
+      "ticker": "317330",
+      "name": "덕산테코피아",
       "market": "KR",
-      "quantity": 260,
-      "avg_price_krw": 22981,
-      "sector": ""
-    },
-    {
-      "ticker": "036890",
-      "name": "진성티이씨",
-      "market": "KR",
-      "quantity": 218,
-      "avg_price_krw": 18300,
+      "quantity": 217,
+      "avg_price_krw": 31980,
       "sector": ""
     },
     {
@@ -44,11 +36,11 @@
       "sector": ""
     },
     {
-      "ticker": "209640",
-      "name": "와이제이링크",
+      "ticker": "084370",
+      "name": "유진테크",
       "market": "KR",
-      "quantity": 980,
-      "avg_price_krw": 7153,
+      "quantity": 49,
+      "avg_price_krw": 140943,
       "sector": ""
     },
     {

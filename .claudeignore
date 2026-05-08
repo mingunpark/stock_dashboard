@@ -1,0 +1,3 @@
+# yfinance 캐시
+*.pkl
+/tmp/

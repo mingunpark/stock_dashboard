@@ -336,24 +336,127 @@ def fetch_fx_rate() -> float:
 
 # ── 재무 정보 ─────────────────────────────────────────────────
 
-def fetch_financials(ticker: str, market: str) -> dict:
-    """yfinance로 종목 재무 지표 조회. KR은 .KS → .KQ fallback."""
+_NAVER_FINANCE_URL = "https://m.stock.naver.com/api/stock/{ticker}/finance/annual"
+_NAVER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+    "Referer": "https://m.stock.naver.com/",
+}
 
-    if market == "KR":
-        suffixes = [".KS", ".KQ"]
-        candidates = [ticker + s for s in suffixes]
-    else:
-        candidates = [ticker]
+def _parse_naver_num(val: str | None) -> float | None:
+    if not val or val in ("-", "N/A", ""):
+        return None
+    try:
+        return float(val.replace(",", "").replace("%", "").strip())
+    except (ValueError, TypeError):
+        return None
 
+
+def _fetch_financials_kr(ticker: str) -> dict:
+    """네이버 금융 모바일 API로 KR 종목 재무 지표 조회."""
+    url = _NAVER_FINANCE_URL.format(ticker=ticker)
+    naver = {}
+    try:
+        resp = requests.get(url, headers=_NAVER_HEADERS, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        fi = data.get("financeInfo", {})
+
+        # 가장 최근 확정(isConsensus=N) 연도 key 찾기
+        titles = fi.get("trTitleList", [])
+        confirmed = [t for t in titles if t.get("isConsensus") == "N"]
+        if not confirmed:
+            confirmed = titles
+        latest_key = confirmed[-1]["key"] if confirmed else None
+
+        if latest_key:
+            row_map = {r["title"]: r.get("columns", {}) for r in fi.get("rowList", [])}
+
+            def _col(row_title: str) -> float | None:
+                cols = row_map.get(row_title, {})
+                cell = cols.get(latest_key, {})
+                return _parse_naver_num(cell.get("value"))
+
+            naver = {
+                "per":            _col("PER"),
+                "pbr":            _col("PBR"),
+                "roe":            _col("ROE"),
+                "eps":            _col("EPS"),
+                "dividend_yield": _col("주당배당금"),  # 원 단위 — 아래서 비율로 변환
+            }
+    except Exception:
+        pass
+
+    # yfinance로 시총·마진·부채·섹터 보완 (.KS → .KQ fallback)
     info = None
-    for yt in candidates:
+    for suffix in [".KS", ".KQ"]:
         try:
-            _info = yf.Ticker(yt).info
-            if _info and (_info.get("trailingPE") is not None or _info.get("marketCap") is not None):
+            _info = yf.Ticker(ticker + suffix).info
+            if _info and _info.get("marketCap") is not None:
                 info = _info
                 break
         except Exception:
             continue
+
+    def _yv(key):
+        if info is None:
+            return None
+        v = info.get(key)
+        if v is None:
+            return None
+        try:
+            r = float(v)
+        except (ValueError, TypeError):
+            return None
+        return None if (math.isnan(r) or math.isinf(r)) else round(r, 4)
+
+    mc = None
+    if info:
+        raw_mc = info.get("marketCap")
+        try:
+            mc = int(raw_mc) if raw_mc is not None and not math.isnan(float(raw_mc)) and not math.isinf(float(raw_mc)) else None
+        except (ValueError, TypeError):
+            mc = None
+
+    # 배당수익률: 네이버는 주당배당금(원)을 반환하므로 현재가로 나눠 비율 계산
+    div_yield = None
+    if naver.get("dividend_yield") is not None and info:
+        price = info.get("currentPrice") or info.get("regularMarketPrice")
+        if price:
+            try:
+                ratio = naver["dividend_yield"] / float(price)
+                div_yield = round(ratio, 4) if 0 < ratio <= 0.5 else None
+            except (ValueError, TypeError, ZeroDivisionError):
+                pass
+        # 현재가 없으면 yfinance dividendYield fallback
+    if div_yield is None:
+        raw_dy = _yv("dividendYield")
+        div_yield = raw_dy if (raw_dy or 0) <= 0.5 else None
+
+    return {
+        "market_cap":       mc,
+        "per":              naver.get("per") or _yv("trailingPE"),
+        "forward_per":      _yv("forwardPE"),
+        "pbr":              naver.get("pbr") or _yv("priceToBook"),
+        "roe":              naver.get("roe") or _yv("returnOnEquity"),
+        "eps":              naver.get("eps") or _yv("trailingEps"),
+        "operating_margin": _yv("operatingMargins"),
+        "profit_margin":    _yv("profitMargins"),
+        "debt_to_equity":   _yv("debtToEquity"),
+        "dividend_yield":   div_yield,
+        "sector":           (info or {}).get("sector", ""),
+        "industry":         (info or {}).get("industry", ""),
+    }
+
+
+def _fetch_financials_us(ticker: str) -> dict:
+    """yfinance로 US 종목 재무 지표 조회."""
+    info = None
+    try:
+        _info = yf.Ticker(ticker).info
+        if _info and (_info.get("trailingPE") is not None or _info.get("marketCap") is not None):
+            info = _info
+    except Exception:
+        pass
 
     if info is None:
         return {"error": "재무 데이터 없음"}
@@ -384,10 +487,17 @@ def fetch_financials(ticker: str, market: str) -> dict:
         "operating_margin": _v("operatingMargins"),
         "profit_margin":    _v("profitMargins"),
         "debt_to_equity":   _v("debtToEquity"),
-        "dividend_yield":   _v("dividendYield"),
+        "dividend_yield":   _v("dividendYield") if (_v("dividendYield") or 0) <= 0.5 else None,
         "sector":           info.get("sector", ""),
         "industry":         info.get("industry", ""),
     }
+
+
+def fetch_financials(ticker: str, market: str) -> dict:
+    """종목 재무 지표 조회. KR은 네이버 금융 + yfinance 혼합, US는 yfinance."""
+    if market == "KR":
+        return _fetch_financials_kr(ticker)
+    return _fetch_financials_us(ticker)
 
 
 def fetch_market_indicators() -> dict:
