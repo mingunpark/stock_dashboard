@@ -1,6 +1,6 @@
 {
   "target_return_pct": 15.0,
-  "cash_krw": 0,
+  "cash_krw": 1000000,
   "cash_usd": 0.0,
   "holdings": [
     {
@@ -8,63 +8,72 @@
       "name": "삼성전자",
       "market": "KR",
       "quantity": 66,
-      "avg_price_krw": 164932
+      "avg_price_krw": 164932,
+      "sector": ""
     },
     {
       "ticker": "000660",
       "name": "SK하이닉스",
       "market": "KR",
       "quantity": 11,
-      "avg_price_krw": 960081
+      "avg_price_krw": 960081,
+      "sector": ""
     },
     {
       "ticker": "032820",
       "name": "우리기술",
       "market": "KR",
       "quantity": 260,
-      "avg_price_krw": 22981
+      "avg_price_krw": 22981,
+      "sector": ""
     },
     {
       "ticker": "036890",
       "name": "진성티이씨",
       "market": "KR",
       "quantity": 218,
-      "avg_price_krw": 18300
+      "avg_price_krw": 18300,
+      "sector": ""
     },
     {
       "ticker": "166090",
       "name": "하나머티리얼즈",
       "market": "KR",
       "quantity": 76,
-      "avg_price_krw": 73771
+      "avg_price_krw": 73771,
+      "sector": ""
     },
     {
       "ticker": "209640",
       "name": "와이제이링크",
       "market": "KR",
       "quantity": 980,
-      "avg_price_krw": 7153
+      "avg_price_krw": 7153,
+      "sector": ""
     },
     {
       "ticker": "034020",
       "name": "두산에너빌리티",
       "market": "KR",
       "quantity": 49,
-      "avg_price_krw": 99996
+      "avg_price_krw": 99996,
+      "sector": ""
     },
     {
       "ticker": "067310",
       "name": "하나마이크론",
       "market": "KR",
       "quantity": 130,
-      "avg_price_krw": 40950
+      "avg_price_krw": 40950,
+      "sector": ""
     },
     {
       "ticker": "007660",
       "name": "이수페타시스",
       "market": "KR",
       "quantity": 31,
-      "avg_price_krw": 157000
+      "avg_price_krw": 157000,
+      "sector": ""
     }
   ]
 }
